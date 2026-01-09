@@ -3,56 +3,28 @@ package com.example.server.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
 import java.time.LocalDateTime;
 
+@Data
 @TableName("media_files")
 public class MediaFile {
+
     @TableId(type = IdType.AUTO)
     private Long id;
+
+    private Long userId;          // 核心：记录是谁传的
+
     private String filename;
-    private String status;
+    private String status;        // UPLOADED, COMPLETED
     private String filePath;
+
+    // 下面这几个是新加的
+    private String aiSummary;
+    private String transcriptText;
+    private String coverUrl;
+
+    // 【修改点】删掉了 @TableField(fill = ...) 注解
+    // 上传时间由数据库自动记录，Java 不插手，防止报错
     private LocalDateTime uploadTime;
-
-    // === 下面是手动补全的 Getter 和 Setter 方法，专治“找不到符号” ===
-
-    public Long getId() {
-        return id;
-    }
-
-    public void setId(Long id) {
-        this.id = id;
-    }
-
-    public String getFilename() {
-        return filename;
-    }
-
-    public void setFilename(String filename) {
-        this.filename = filename;
-    }
-
-    public String getStatus() {
-        return status;
-    }
-
-    public void setStatus(String status) {
-        this.status = status;
-    }
-
-    public String getFilePath() {
-        return filePath;
-    }
-
-    public void setFilePath(String filePath) {
-        this.filePath = filePath;
-    }
-
-    public LocalDateTime getUploadTime() {
-        return uploadTime;
-    }
-
-    public void setUploadTime(LocalDateTime uploadTime) {
-        this.uploadTime = uploadTime;
-    }
 }
