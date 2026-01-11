@@ -1,22 +1,2 @@
 .idea/
 *.iml
-
-# === 忽略多媒体垃圾文件 ===
-*.mp4
-*.mp3
-*.wav
-*.avi
-*.mov
-
-# === 忽略上传和临时目录 ===
-uploads/
-temp/
-logs/
-
-# === 忽略 IDEA 和 系统文件 ===
-.idea/
-*.iml
-.DS_Store
-target/
-node_modules/
-dist/

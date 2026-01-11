@@ -2,6 +2,7 @@ package com.example.server.controller;
 
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
+import com.example.server.service.AiService; // 【新增】导入异步服务
 import com.example.server.strategy.AiAnalysisStrategy;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -32,35 +33,38 @@ public class DebugController {
     @Qualifier("defaultAiStrategy")
     private AiAnalysisStrategy aiAnalysisStrategy;
 
-    // === 1. AI 总结接口 ===
+    // 【新增】注入异步业务服务 (线程池入口)
+    @Autowired
+    private AiService aiService;
+
+    // === 1. AI 总结接口 (升级为：异步非阻塞模式) ===
     @GetMapping("/ai")
     public String testAi(@RequestParam Long id) {
         MediaFile mediaFile = mediaFileMapper.selectById(id);
         if (mediaFile == null) return "❌ 找不到文件记录";
 
-        // 【修正】直接传路径字符串 (可能是 http://... 也可能是 D:/...)
-        String result = aiAnalysisStrategy.generateSummary(mediaFile.getFilePath());
+        // 【核心修改】不再直接调用 Strategy 阻塞等待，而是丢给 Service 里的线程池
+        aiService.asyncAnalyze(id);
 
-        mediaFile.setAiSummary(result);
-        mediaFileMapper.updateById(mediaFile);
-        return result;
+        System.out.println("🚀 主线程已释放，任务交给线程池处理");
+
+        // 立刻返回给前端，不需要等几十秒了
+        return "✅ 任务已后台运行！请稍后刷新列表查看结果。";
     }
 
-    // === 2. 纯文字提取接口 ===
+    // === 2. 纯文字提取接口 异步===
     @GetMapping("/transcribe")
     public String transcribe(@RequestParam Long id) {
         MediaFile mediaFile = mediaFileMapper.selectById(id);
         if (mediaFile == null) return "❌ 找不到文件记录";
 
-        // 【修正】直接传路径字符串
-        String text = aiAnalysisStrategy.transcribe(mediaFile.getFilePath());
+        // 【修改】调用异步服务
+        aiService.asyncTranscribe(id);
 
-        mediaFile.setTranscriptText(text);
-        mediaFileMapper.updateById(mediaFile);
-        return text;
+        return "✅ 提取任务已后台运行！请稍后查看结果。";
     }
 
-    // === 3. 下载音频接口 (兼容 MinIO) ===
+    // === 3. 下载音频接口 (兼容 MinIO，保持原样) ===
     @GetMapping("/download")
     public ResponseEntity<Resource> download(@RequestParam Long id) throws IOException {
         MediaFile mediaFile = mediaFileMapper.selectById(id);
@@ -78,7 +82,7 @@ public class DebugController {
 
         System.out.println("⬇️ 下载请求，正在从源地址转码音频: " + inputPath);
 
-        // 复用 FFmpeg 逻辑 (为了简单，这里直接内联写一遍 FFmpeg 调用，或者把 FFmpeg 抽成公共 Utils 更好，但现在先这样写)
+        // 复用 FFmpeg 逻辑
         boolean success = runFfmpeg(inputPath, outputMp3Path);
 
         if (!success) return ResponseEntity.internalServerError().build();

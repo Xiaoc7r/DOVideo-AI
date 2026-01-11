@@ -263,6 +263,7 @@ const authLoading = ref(false)
 const authMessage = ref('')
 const authError = ref(false)
 const authForm = ref({ username: '', password: '', nickname: '' })
+const pollingTimers = ref({})
 
 // Markdown 解析
 const renderedMarkdown = computed(() => {
@@ -398,31 +399,137 @@ const downloadAudio = async (item) => {
   }
 }
 
+// --- 2. 全文提取 (升级为异步 + 轮询) ---
 const transcribe = async (id) => {
+  const item = list.value.find(i => i.id === id)
+
+  // 情况A: 已经有结果了
+  if (item && item.transcriptText) {
+    openSidebar('text', '全量文字提取')
+    sidebar.value.content = item.transcriptText
+    sidebar.value.loading = false
+    return
+  }
+
+  // 情况B: 正在轮询中
+  if (pollingTimers.value[id] && pollingTimers.value[id].type === 'text') {
+    openSidebar('text', '全量文字提取')
+    sidebar.value.loading = true
+    sidebar.value.content = "📝 文字提取正在后台进行中..."
+    return
+  }
+
+  // 情况C: 新任务
   openSidebar('text', '全量文字提取')
+  sidebar.value.loading = true
+  sidebar.value.content = "📝 提取任务已提交，正在识别语音流..."
+
   try {
-    // 这里如果视频太长，fetch 可能会超时
-    const res = await fetch(`http://localhost:9090/debug/transcribe?id=${id}`)
-    const text = await res.text()
-    sidebar.value.content = text
+    await fetch(`http://localhost:9090/debug/transcribe?id=${id}`)
+    // 开启轮询 (标记类型为 text)
+    startPolling(id, 'text')
   } catch (e) {
-    sidebar.value.content = "Error: 请求超时或失败 (建议使用短视频测试)"
-  } finally {
+    sidebar.value.content = "Error: " + e
     sidebar.value.loading = false
   }
 }
 
+// --- 1. AI 智能总结 (防重复提交版) ---
 const aiAnalyze = async (id) => {
+  const item = list.value.find(i => i.id === id)
+
+  // 情况A: 已经有结果了 -> 直接显示
+  if (item && item.aiSummary && !item.aiSummary.includes("任务已") && !item.aiSummary.includes("正在")) {
+    openSidebar('ai', 'AI 智能总结')
+    sidebar.value.content = item.aiSummary
+    sidebar.value.loading = false
+    return
+  }
+
+  // 情况B: 正在轮询中 (防止重复点击) -> 直接打开侧边栏等待
+  if (pollingTimers.value[id] && pollingTimers.value[id].type === 'ai') {
+    openSidebar('ai', 'AI 智能总结')
+    sidebar.value.loading = true
+    sidebar.value.content = "🚀 系统正在后台拼命计算中...\n\n(任务正在进行，无需重复提交)"
+    return
+  }
+
+  // 情况C: 新任务 -> 发请求
   openSidebar('ai', 'AI 智能总结')
+  sidebar.value.loading = true
+  sidebar.value.content = "🚀 任务已提交至后台，系统正在全力计算中..."
+
   try {
-    const res = await fetch(`http://localhost:9090/debug/ai?id=${id}`)
-    const text = await res.text()
-    sidebar.value.content = text
+    await fetch(`http://localhost:9090/debug/ai?id=${id}`)
+    // 开启轮询 (标记类型为 ai)
+    startPolling(id, 'ai')
   } catch (e) {
     sidebar.value.content = "Error: " + e
-  } finally {
     sidebar.value.loading = false
   }
+}
+
+// --- 3. 通用轮询器 (支持 AI 和 Text 两种模式) ---
+const startPolling = (id, type) => {
+  // 如果已经有定时器，先清理掉旧的，防止冲突
+  if (pollingTimers.value[id]) clearInterval(pollingTimers.value[id].timer)
+
+  console.log(`[轮询] 开始监听任务 ID: ${id}, 类型: ${type}`)
+
+  const timer = setInterval(async () => {
+    // 1. 刷新列表
+    await fetchList()
+    const item = list.value.find(i => i.id === id)
+    if (!item) return
+
+    let isFinished = false
+    let result = ''
+
+    // 2. 根据类型判断是否完成
+    if (type === 'ai') {
+      // 判断 AI 是否完成
+      if (item.aiSummary && !item.aiSummary.includes("任务已") && !item.aiSummary.includes("正在")) {
+        isFinished = true
+        result = item.aiSummary
+      }
+    } else if (type === 'text') {
+      // 判断文字提取是否完成
+      if (item.transcriptText) {
+        isFinished = true
+        result = item.transcriptText
+      }
+    }
+
+    // 3. 如果完成了
+    if (isFinished) {
+      console.log(`✅ [${type}] 任务完成！`)
+
+      // 更新侧边栏 (只有当侧边栏打开且类型匹配时才更新，防止串台)
+      if (sidebar.value.visible && sidebar.value.type === type) {
+        sidebar.value.content = result
+        sidebar.value.loading = false
+      }
+
+      message.value = `✅ 任务完成`
+      setTimeout(() => message.value = '', 3000)
+
+      // 清理定时器
+      clearInterval(timer)
+      delete pollingTimers.value[id]
+    }
+
+  }, 3000)
+
+  // 保存定时器和类型
+  pollingTimers.value[id] = { timer, type }
+
+  // 5分钟超时兜底
+  setTimeout(() => {
+    if (pollingTimers.value[id]) {
+      clearInterval(pollingTimers.value[id].timer)
+      delete pollingTimers.value[id]
+    }
+  }, 300000)
 }
 
 const openSidebar = (type, title) => {
