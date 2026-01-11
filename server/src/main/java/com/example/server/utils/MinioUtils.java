@@ -72,4 +72,23 @@ public class MinioUtils {
             System.err.println("❌ MinIO 删除失败: " + e.getMessage());
         }
     }
+
+    /**
+     * 【新增】上传本地 File 对象到 MinIO
+     */
+    public String uploadLocalFile(java.io.File file) throws Exception {
+        java.io.FileInputStream inputStream = new java.io.FileInputStream(file);
+
+        minioClient.putObject(
+                io.minio.PutObjectArgs.builder()
+                        .bucket(bucketName)
+                        .object(file.getName()) // 文件名已经包含 UUID
+                        .stream(inputStream, file.length(), -1)
+                        .contentType("video/mp4") // 默认当 mp4 处理
+                        .build()
+        );
+        inputStream.close();
+
+        return endpoint + "/" + bucketName + "/" + file.getName();
+    }
 }

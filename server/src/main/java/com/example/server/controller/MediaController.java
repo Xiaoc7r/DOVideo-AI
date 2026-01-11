@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
 import com.example.server.utils.MinioUtils;
+import com.example.server.utils.YtDlpUtils; // 确保导入这个
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -11,6 +12,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.File; // 【关键】之前可能缺这个导致爆红
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -31,7 +33,10 @@ public class MediaController {
     @Autowired
     private MinioUtils minioUtils;
 
-    // === 1. 上传接口 ===
+    @Autowired
+    private YtDlpUtils ytDlpUtils;
+
+    // === 1. 普通文件上传接口 ===
     @PostMapping("/upload")
     public String upload(@RequestParam("file") MultipartFile file,
                          @RequestParam(value = "userId", required = false) Long userId) {
@@ -65,7 +70,54 @@ public class MediaController {
         }
     }
 
-    // === 2. 列表接口 ===
+    // === 2. 视频链接上传接口 (修复版：状态码控制) ===
+    @PostMapping("/upload-url")
+    public org.springframework.http.ResponseEntity<String> uploadUrl(@RequestParam("url") String url,
+                                                                     @RequestParam(value = "userId", required = false) Long userId) {
+        File tempFile = null;
+        try {
+            System.out.println("🔗 收到链接上传请求: " + url);
+
+            // 1. 调用 yt-dlp 下载 (后面我们会改 Utils 让他下最低画质)
+            tempFile = ytDlpUtils.downloadVideo(url);
+
+            // 2. 上传到 MinIO
+            String fileUrl = minioUtils.uploadLocalFile(tempFile);
+
+            // 3. 存数据库
+            MediaFile mediaFile = new MediaFile();
+            mediaFile.setFilename("WEB_" + tempFile.getName());
+            mediaFile.setFilePath(fileUrl);
+            mediaFile.setStatus("COMPLETED");
+
+            if (userId != null) {
+                mediaFile.setUserId(userId);
+            }
+
+            mediaFileMapper.insert(mediaFile);
+
+            // 4. 清缓存
+            if (userId != null) {
+                String cacheKey = "media:list:user:" + userId;
+                redisTemplate.delete(cacheKey);
+                System.out.println("缓存已清除: " + cacheKey);
+            }
+
+            // 【关键】成功返回 200
+            return org.springframework.http.ResponseEntity.ok("上传成功");
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            // 【关键】失败返回 500，前端 fetch 会抛出异常
+            return org.springframework.http.ResponseEntity.status(500).body("上传失败: " + e.getMessage());
+        } finally {
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
+        }
+    }
+
+    // === 3. 列表接口 ===
     @GetMapping("/list")
     public List<MediaFile> getList(@RequestParam(value = "userId", required = false) Long userId) {
         String cacheKey = "media:list:user:" + (userId == null ? "anon" : userId);
@@ -99,7 +151,7 @@ public class MediaController {
         return list;
     }
 
-    // === 3. 删除接口 (含 MinIO 删除) ===
+    // === 4. 删除接口 ===
     @DeleteMapping("/delete")
     public String delete(@RequestParam("id") Long id,
                          @RequestParam(value = "userId", required = false) Long userId) {
@@ -111,7 +163,6 @@ public class MediaController {
             return "无权删除他人的文件";
         }
 
-        // 调用 MinIO 删除云端文件
         if (media.getFilePath() != null && media.getFilePath().startsWith("http")) {
             minioUtils.removeFile(media.getFilePath());
         }

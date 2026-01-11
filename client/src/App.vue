@@ -47,33 +47,64 @@
               accept="video/*"
               hidden
           />
-          <label
-              for="file-input"
+
+          <div
               class="upload-magnet"
               :class="{ 'processing': uploading, 'is-dragover': isDragOver }"
               @dragover.prevent="isDragOver = true"
               @dragleave.prevent="isDragOver = false"
               @drop.prevent="handleDrop"
           >
-            <div class="magnet-content" v-if="!uploading">
-              <div class="magnet-icon">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 16 12 12 8 16"></polyline><line x1="12" y1="12" x2="12" y2="21"></line><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"></path><polyline points="16 16 12 12 8 16"></polyline></svg>
+            <div class="split-container" v-if="!uploading">
+
+              <label for="file-input" class="skew-pane pane-local">
+                <div class="pane-content unskew">
+                  <div class="magnet-icon">
+                    <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                  </div>
+                  <span class="magnet-title">LOCAL FILE</span>
+                  <span class="magnet-desc">{{ isDragOver ? '松手上传' : '点击 / 拖拽本地文件' }}</span>
+                </div>
+              </label>
+
+              <div class="split-gap"></div>
+
+              <div class="skew-pane pane-url">
+                <div class="pane-content unskew">
+                  <div class="magnet-icon">
+                    <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                  </div>
+                  <span class="magnet-title">WEB LINK</span>
+                  <span class="magnet-desc">B站 / YouTube / 抖音</span>
+
+                  <div class="url-input-box" @click.stop>
+                    <input
+                        v-model="videoUrl"
+                        type="text"
+                        placeholder="粘贴视频链接..."
+                        @keyup.enter="handleUrlUpload"
+                    />
+                    <button class="url-go-btn" @click="handleUrlUpload">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </button>
+                  </div>
+                </div>
               </div>
-              <span class="magnet-title">接入视频源</span>
-              <span class="magnet-desc">{{ isDragOver ? '松手即可上传' : '点击上传 / 拖拽文件入场' }}</span>
+
             </div>
 
             <div class="magnet-content busy" v-else>
               <div class="quantum-loader"></div>
-              <span class="busy-text">正在上传并进行深度转码...</span>
+              <span class="busy-text">正在建立加密通道并解析资源...</span>
             </div>
 
             <div class="border-glow"></div>
-          </label>
+          </div>
         </div>
-
         <transition name="toast-pop">
-          <div v-if="message" class="notification-bar">{{ message }}</div>
+          <div v-if="message" class="notification-bar" :class="{ 'error': message.startsWith('❌') || message.startsWith('⚠️') }">
+            {{ message }}
+          </div>
         </transition>
       </section>
 
@@ -169,39 +200,29 @@
             <h2 class="auth-title">{{ authMode === 'login' ? '用户登录' : '新用户注册' }}</h2>
             <button class="close-btn" @click="closeAuthModal">×</button>
           </div>
-
           <div class="auth-body">
             <div class="input-group">
               <label>USERNAME</label>
               <input v-model="authForm.username" type="text" placeholder="输入账号" />
             </div>
-
             <div class="input-group">
               <label>PASSWORD</label>
               <input v-model="authForm.password" type="password" placeholder="输入密码" />
             </div>
-
             <div class="input-group" v-if="authMode === 'register'">
               <label>NICKNAME (昵称)</label>
               <input v-model="authForm.nickname" type="text" placeholder="设置一个好听的名字" />
             </div>
-
             <div class="auth-action">
               <button class="cyber-btn" @click="handleAuth" :disabled="authLoading">
                 <span v-if="!authLoading">{{ authMode === 'login' ? '立即登录' : '提交注册' }}</span>
                 <span v-else>请求处理中...</span>
               </button>
             </div>
-
             <div class="auth-toggle">
-              <span class="toggle-text">
-                {{ authMode === 'login' ? '没有账号?' : '已有账号?' }}
-              </span>
-              <button class="toggle-link" @click="switchAuthMode">
-                {{ authMode === 'login' ? '去注册' : '去登录' }}
-              </button>
+              <span class="toggle-text">{{ authMode === 'login' ? '没有账号?' : '已有账号?' }}</span>
+              <button class="toggle-link" @click="switchAuthMode">{{ authMode === 'login' ? '去注册' : '去登录' }}</button>
             </div>
-
             <p v-if="authMessage" class="auth-msg" :class="{'error': authError}">{{ authMessage }}</p>
           </div>
         </div>
@@ -216,46 +237,13 @@ import { marked } from 'marked'
 
 // --- 变量定义 ---
 const file = ref(null)
+// 【补全 URL 逻辑】虽然你给的标准代码没包含这个，但为了 template 能跑，必须加回来
+const videoUrl = ref('')
 const message = ref('')
 const uploading = ref(false)
 const list = ref([])
-
-// --- 新增拖拽状态 ---
 const isDragOver = ref(false)
-
-// --- 新增拖拽处理函数 ---
-const handleDrop = async (e) => {
-  isDragOver.value = false // 拖放结束，取消高亮
-
-  // 1. 检查登录 (复用之前的逻辑)
-  if (!currentUser.value) {
-    message.value = '⚠️ 权限受限：请先登录系统'
-    setTimeout(() => message.value = '', 3000)
-    openAuthModal()
-    return
-  }
-
-  // 2. 获取拖进来的文件 (注意：这里是 dataTransfer)
-  const droppedFiles = e.dataTransfer.files
-  if (!droppedFiles || droppedFiles.length === 0) return
-
-  const selectedFile = droppedFiles[0]
-
-  // 3. 简单校验一下是不是视频
-  if (!selectedFile.type.startsWith('video/')) {
-    message.value = '⚠️ 仅支持上传视频文件'
-    setTimeout(() => message.value = '', 3000)
-    return
-  }
-
-  // 4. 开始上传
-  file.value = selectedFile
-  await uploadFile()
-}
-
 const sidebar = ref({ visible: false, type: 'ai', title: '', content: '', loading: false })
-
-// 用户系统变量
 const currentUser = ref(null)
 const showAuthModal = ref(false)
 const authMode = ref('login')
@@ -279,28 +267,44 @@ const renderedMarkdown = computed(() => {
 const handleFileChange = async (e) => {
   if (!currentUser.value) {
     e.target.value = ''
-    message.value = '⚠️ 权限受限：请先登录系统'
-    setTimeout(() => message.value = '', 3000)
+    showMsg('⚠️ 权限受限：请先登录系统', true)
     openAuthModal()
     return
   }
-
   const selectedFile = e.target.files[0]
   if (!selectedFile) return
   file.value = selectedFile
+  videoUrl.value = ''
   await uploadFile()
 }
 
+const handleDrop = async (e) => {
+  isDragOver.value = false
+  if (!currentUser.value) {
+    showMsg('⚠️ 权限受限：请先登录系统', true)
+    openAuthModal()
+    return
+  }
+  const droppedFiles = e.dataTransfer.files
+  if (!droppedFiles || droppedFiles.length === 0) return
+  const selectedFile = droppedFiles[0]
+  if (!selectedFile.type.startsWith('video/')) {
+    showMsg('⚠️ 仅支持上传视频文件', true)
+    return
+  }
+  file.value = selectedFile
+  videoUrl.value = ''
+  await uploadFile()
+}
+
+// 【普通文件上传】
 const uploadFile = async () => {
   if (!file.value) return
   uploading.value = true
   message.value = '正在建立加密通道并上传数据...'
   const formData = new FormData()
   formData.append('file', file.value)
-
-  if (currentUser.value) {
-    formData.append('userId', currentUser.value.id)
-  }
+  if (currentUser.value) formData.append('userId', currentUser.value.id)
 
   try {
     const res = await fetch('http://localhost:9090/media/upload', {
@@ -308,33 +312,77 @@ const uploadFile = async () => {
       body: formData
     })
     const text = await res.text()
-    if (!res.ok) throw new Error('Upload failed')
+    if (!res.ok) throw new Error(text || 'Upload failed')
 
-    message.value = '✅ 上传完成'
-    fetchList() // 上传成功后刷新列表
+    showMsg('✅ 本地上传完成')
+    fetchList()
   } catch (error) {
     console.error(error)
-    message.value = '❌ 上传失败 (请检查后端黑窗口报错)'
+    showMsg('❌ 上传失败: ' + error.message, true)
   } finally {
     uploading.value = false
-    setTimeout(() => { if(!uploading.value) message.value = '' }, 4000)
   }
 }
 
-// 【关键修改】拉取列表逻辑
+// 【链接上传 - 补全逻辑】
+const handleUrlUpload = async () => {
+  if (!videoUrl.value) return
+
+  if (!currentUser.value) {
+    showMsg('⚠️ 权限受限：请先登录系统', true)
+    openAuthModal()
+    return
+  }
+
+  // 简单校验链接
+  if (!videoUrl.value.startsWith('http')) {
+    showMsg('⚠️ 请输入合法的 http/https 链接', true)
+    return
+  }
+
+  uploading.value = true
+  message.value = '正在解析链接并极速下载...'
+
+  const formData = new FormData()
+  formData.append('url', videoUrl.value)
+  if (currentUser.value) formData.append('userId', currentUser.value.id)
+
+  try {
+    const res = await fetch('http://localhost:9090/media/upload-url', {
+      method: 'POST',
+      body: formData
+    })
+    const text = await res.text()
+    if (!res.ok) throw new Error(text)
+
+    showMsg('✅ 链接资源已入库')
+    videoUrl.value = ''
+    fetchList()
+  } catch (error) {
+    console.error(error)
+    // 提取后端传来的具体错误信息
+    let errMsg = error.message
+    if (errMsg.includes("Unsupported URL")) errMsg = "不支持该平台链接"
+    showMsg('❌ 解析失败: ' + errMsg, true)
+  } finally {
+    uploading.value = false
+  }
+}
+
+const showMsg = (msg, isError = false) => {
+  message.value = msg
+  setTimeout(() => { if(message.value === msg) message.value = '' }, 4000)
+}
+
 const fetchList = async () => {
   try {
     let url = 'http://localhost:9090/media/list'
-
-    // 如果已登录，带上 userId
     if (currentUser.value) {
       url += `?userId=${currentUser.value.id}`
-
       const res = await fetch(url)
       const data = await res.json()
       list.value = data.reverse()
     } else {
-      // 没登录，直接清空列表，不发请求
       list.value = []
     }
   } catch (error) {
@@ -342,31 +390,21 @@ const fetchList = async () => {
   }
 }
 
-// --- 新增：删除逻辑 ---
 const deleteItem = async (item) => {
   if (!confirm(`确认要永久删除 "${item.filename}" 吗？`)) return
-
   try {
     let url = `http://localhost:9090/media/delete?id=${item.id}`
-    // 如果登录了，带上验证 ID
-    if (currentUser.value) {
-      url += `&userId=${currentUser.value.id}`
-    }
-
+    if (currentUser.value) url += `&userId=${currentUser.value.id}`
     const res = await fetch(url, { method: 'DELETE' })
     const text = await res.text()
-
     if (text === '删除成功') {
-      message.value = '文件已销毁'
-      // 这里的优化：不用重新拉列表，直接在前端把这一项移除，体验更丝滑
+      showMsg('文件已销毁')
       list.value = list.value.filter(i => i.id !== item.id)
     } else {
-      message.value = '❌ ' + text
+      showMsg('❌ ' + text, true)
     }
-    setTimeout(() => message.value = '', 3000)
   } catch (e) {
-    console.error(e)
-    message.value = '❌ 删除请求失败'
+    showMsg('❌ 删除请求失败', true)
   }
 }
 
@@ -381,7 +419,7 @@ const downloadAudio = async (item) => {
   let fileName = item.filename || 'audio.mp3';
   fileName = fileName.replace(/\.[^/.]+$/, "") + ".mp3";
   try {
-    message.value = '正在转码并下载...'
+    showMsg('正在转码并下载...')
     const res = await fetch(url)
     if(!res.ok) throw new Error("Fail")
     const blob = await res.blob()
@@ -393,40 +431,31 @@ const downloadAudio = async (item) => {
     link.click()
     document.body.removeChild(link)
     window.URL.revokeObjectURL(downloadUrl)
-    message.value = '✅ 下载完成'
+    showMsg('✅ 下载完成')
   } catch (e) {
     alert("下载失败")
   }
 }
 
-// --- 2. 全文提取 (升级为异步 + 轮询) ---
 const transcribe = async (id) => {
   const item = list.value.find(i => i.id === id)
-
-  // 情况A: 已经有结果了
   if (item && item.transcriptText) {
     openSidebar('text', '全量文字提取')
     sidebar.value.content = item.transcriptText
     sidebar.value.loading = false
     return
   }
-
-  // 情况B: 正在轮询中
   if (pollingTimers.value[id] && pollingTimers.value[id].type === 'text') {
     openSidebar('text', '全量文字提取')
     sidebar.value.loading = true
     sidebar.value.content = "📝 文字提取正在后台进行中..."
     return
   }
-
-  // 情况C: 新任务
   openSidebar('text', '全量文字提取')
   sidebar.value.loading = true
   sidebar.value.content = "📝 提取任务已提交，正在识别语音流..."
-
   try {
     await fetch(`http://localhost:9090/debug/transcribe?id=${id}`)
-    // 开启轮询 (标记类型为 text)
     startPolling(id, 'text')
   } catch (e) {
     sidebar.value.content = "Error: " + e
@@ -434,34 +463,25 @@ const transcribe = async (id) => {
   }
 }
 
-// --- 1. AI 智能总结 (防重复提交版) ---
 const aiAnalyze = async (id) => {
   const item = list.value.find(i => i.id === id)
-
-  // 情况A: 已经有结果了 -> 直接显示
   if (item && item.aiSummary && !item.aiSummary.includes("任务已") && !item.aiSummary.includes("正在")) {
     openSidebar('ai', 'AI 智能总结')
     sidebar.value.content = item.aiSummary
     sidebar.value.loading = false
     return
   }
-
-  // 情况B: 正在轮询中 (防止重复点击) -> 直接打开侧边栏等待
   if (pollingTimers.value[id] && pollingTimers.value[id].type === 'ai') {
     openSidebar('ai', 'AI 智能总结')
     sidebar.value.loading = true
     sidebar.value.content = "🚀 系统正在后台拼命计算中...\n\n(任务正在进行，无需重复提交)"
     return
   }
-
-  // 情况C: 新任务 -> 发请求
   openSidebar('ai', 'AI 智能总结')
   sidebar.value.loading = true
   sidebar.value.content = "🚀 任务已提交至后台，系统正在全力计算中..."
-
   try {
     await fetch(`http://localhost:9090/debug/ai?id=${id}`)
-    // 开启轮询 (标记类型为 ai)
     startPolling(id, 'ai')
   } catch (e) {
     sidebar.value.content = "Error: " + e
@@ -469,61 +489,37 @@ const aiAnalyze = async (id) => {
   }
 }
 
-// --- 3. 通用轮询器 (支持 AI 和 Text 两种模式) ---
 const startPolling = (id, type) => {
-  // 如果已经有定时器，先清理掉旧的，防止冲突
   if (pollingTimers.value[id]) clearInterval(pollingTimers.value[id].timer)
-
   console.log(`[轮询] 开始监听任务 ID: ${id}, 类型: ${type}`)
-
   const timer = setInterval(async () => {
-    // 1. 刷新列表
     await fetchList()
     const item = list.value.find(i => i.id === id)
     if (!item) return
-
     let isFinished = false
     let result = ''
-
-    // 2. 根据类型判断是否完成
     if (type === 'ai') {
-      // 判断 AI 是否完成
       if (item.aiSummary && !item.aiSummary.includes("任务已") && !item.aiSummary.includes("正在")) {
         isFinished = true
         result = item.aiSummary
       }
     } else if (type === 'text') {
-      // 判断文字提取是否完成
       if (item.transcriptText) {
         isFinished = true
         result = item.transcriptText
       }
     }
-
-    // 3. 如果完成了
     if (isFinished) {
-      console.log(`✅ [${type}] 任务完成！`)
-
-      // 更新侧边栏 (只有当侧边栏打开且类型匹配时才更新，防止串台)
       if (sidebar.value.visible && sidebar.value.type === type) {
         sidebar.value.content = result
         sidebar.value.loading = false
       }
-
-      message.value = `✅ 任务完成`
-      setTimeout(() => message.value = '', 3000)
-
-      // 清理定时器
+      showMsg(`✅ 任务完成`)
       clearInterval(timer)
       delete pollingTimers.value[id]
     }
-
   }, 3000)
-
-  // 保存定时器和类型
   pollingTimers.value[id] = { timer, type }
-
-  // 5分钟超时兜底
   setTimeout(() => {
     if (pollingTimers.value[id]) {
       clearInterval(pollingTimers.value[id].timer)
@@ -541,7 +537,6 @@ const openSidebar = (type, title) => {
 }
 const closeSidebar = () => { sidebar.value.visible = false }
 
-// --- 登录注册逻辑 ---
 const openAuthModal = () => {
   showAuthModal.value = true
   authMessage.value = ''
@@ -552,7 +547,6 @@ const switchAuthMode = () => {
   authMode.value = authMode.value === 'login' ? 'register' : 'login'
   authMessage.value = ''
 }
-
 const handleAuth = async () => {
   if (!authForm.value.username || !authForm.value.password) {
     authMessage.value = '请输入完整的账号和密码'
@@ -571,16 +565,11 @@ const handleAuth = async () => {
     const data = await res.json()
     if (data.code === 200) {
       if (authMode.value === 'login') {
-        // 1. 保存登录态
         currentUser.value = data.userInfo
         localStorage.setItem('user', JSON.stringify(data.userInfo))
         closeAuthModal()
-        message.value = `欢迎回来，${data.userInfo.nickname}`
-
-        // 【关键修复】登录成功后，立即拉取该用户的文件！
+        showMsg(`欢迎回来，${data.userInfo.nickname}`)
         fetchList()
-
-        setTimeout(() => message.value = '', 3000)
       } else {
         authMessage.value = '注册成功，请直接登录'
         authError.value = false
@@ -598,35 +587,25 @@ const handleAuth = async () => {
     authLoading.value = false
   }
 }
-
 const logout = () => {
   currentUser.value = null
   localStorage.removeItem('user')
-
-  // 【关键修复】登出后，立即清空列表
   list.value = []
-
-  message.value = '已退出系统'
-  setTimeout(() => message.value = '', 3000)
+  showMsg('已退出系统')
 }
-
-// 【关键修复】页面加载时的逻辑顺序
 onMounted(() => {
-  // 1. 先尝试恢复登录态
   const savedUser = localStorage.getItem('user')
   if (savedUser) {
     try {
       currentUser.value = JSON.parse(savedUser)
     } catch(e) {}
   }
-
-  // 2. 恢复完了(或者没恢复)，再去拉取列表
-  // 这样 fetchList 内部就能拿到 currentUser.id 了
   fetchList()
 })
 </script>
 
 <style>
+/* 确保字体引用在最上方 */
 @import url('https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Noto+Sans+SC:wght@400;500;700&family=Space+Grotesk:wght@300;500;700&family=Syncopate:wght@700&display=swap');
 
 :root {
@@ -652,7 +631,6 @@ html, body, #app {
 
 .app-stage { position: relative; z-index: 1; width: 100%; min-height: 100vh; color: var(--text-main); font-family: 'Space Grotesk', 'Noto Sans SC', monospace; }
 
-/* 氛围层 */
 .ambient-noise { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.05'/%3E%3C/svg%3E"); pointer-events: none; z-index: -1; }
 .ambient-glow { position: fixed; top: -20%; left: 20%; width: 60vw; height: 60vh; background: radial-gradient(circle, rgba(197, 249, 70, 0.08) 0%, rgba(11, 12, 16, 0) 70%); pointer-events: none; z-index: -2; }
 
@@ -681,29 +659,96 @@ html, body, #app {
 .hero-section { text-align: center; margin-bottom: 6rem; animation: slideUpFade 0.8s forwards; }
 .slogan-main { font-family: 'Syncopate', sans-serif; font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 700; margin-bottom: 0.5rem; text-shadow: 0 0 20px rgba(197, 249, 70, 0.2); }
 .slogan-sub { font-size: 1.1rem; color: var(--text-sub); letter-spacing: 2px; margin-bottom: 3rem; }
-.upload-wrapper { max-width: 680px; margin: 0 auto; perspective: 1000px; opacity: 0; animation: slideUpFade 0.8s 0.2s forwards; }
-.upload-magnet { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 280px; background: var(--bg-card); border-radius: 16px; cursor: pointer; position: relative; transition: all 0.3s; box-shadow: var(--shadow-float); border: 2px solid var(--border-tech); overflow: hidden; background-image: linear-gradient(rgba(197, 249, 70, 0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(197, 249, 70, 0.02) 1px, transparent 1px); background-size: 30px 30px; }
-.upload-magnet:hover { transform: translateY(-8px) scale(1.01); border-color: var(--accent-lime); box-shadow: var(--shadow-glow-lime); }
 
-/* 现在的 hover 样式 */
-.upload-magnet:hover { transform: translateY(-8px) scale(1.01); border-color: var(--accent-lime); box-shadow: var(--shadow-glow-lime); }
+/* === [START] 核心重构：Upload Wrapper (Physical Skew) === */
+.upload-wrapper { max-width: 800px; margin: 0 auto; perspective: 1000px; opacity: 0; animation: slideUpFade 0.8s 0.2s forwards; }
 
-/* --- 新增：拖拽时的样式 (高亮更明显) --- */
-.upload-magnet.is-dragover {
-  border-color: var(--accent-lime);
-  background: rgba(197, 249, 70, 0.1); /* 绿色背景淡入 */
-  box-shadow: 0 0 30px rgba(197, 249, 70, 0.3);
-  transform: scale(1.02);
+.upload-magnet {
+  position: relative; height: 300px;
+  background: var(--bg-card);
+  border-radius: 16px;
+  box-shadow: var(--shadow-float);
+  border: 2px solid var(--border-tech);
+  overflow: hidden; /* 必须隐藏溢出 */
+  transition: all 0.3s;
+}
+.upload-magnet:hover { border-color: var(--accent-lime); box-shadow: var(--shadow-glow-lime); transform: translateY(-5px); }
+
+/* 容器布局 */
+.split-container {
+  display: flex; height: 100%; width: 100%;
+  position: relative; overflow: hidden;
 }
 
-.magnet-content { z-index: 2; display: flex; flex-direction: column; align-items: center; }
-.magnet-icon { color: var(--accent-lime); margin-bottom: 1.5rem; transition: transform 0.3s; filter: drop-shadow(0 0 5px var(--accent-lime)); }
-.upload-magnet:hover .magnet-icon { transform: scale(1.1); filter: drop-shadow(0 0 15px var(--accent-lime)); }
-.magnet-title { font-size: 1.5rem; font-weight: 700; }
-.magnet-desc { font-size: 0.9rem; color: var(--text-sub); font-family: monospace; }
+/* 左右面板 (物理倾斜) */
+.skew-pane {
+  flex: 1; height: 100%; position: relative; cursor: pointer;
+  background: rgba(11, 12, 16, 0.5); /* 默认深色底 */
+  transition: all 0.4s ease;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1;
+  /* 核心：直接对容器进行 skew，而不是 clip-path */
+  transform: skewX(-10deg);
+}
+
+/* 增加左右面板的宽度，确保覆盖边缘 */
+.pane-local { margin-left: -20px; padding-right: 20px; border-right: 2px solid var(--accent-lime); }
+.pane-url { margin-right: -20px; padding-left: 20px; }
+
+/* 鼠标悬停逻辑：只改变背景色，不加外发光，防止穿模 */
+.skew-pane:hover {
+  background: rgba(197, 249, 70, 0.05); /* 极淡的绿色背景，限制在斜框内 */
+  z-index: 10;
+}
+
+/* 中间缝隙 */
+.split-gap { width: 4px; background: transparent; transform: skewX(-10deg); }
+
+/* 内容回正 */
+.pane-content {
+  /* 必须反向 skew 回来，否则文字是斜的 */
+  transform: skewX(10deg);
+  display: flex; flex-direction: column; align-items: center;
+  z-index: 2; transition: transform 0.3s;
+}
+.skew-pane:hover .pane-content { transform: skewX(10deg) scale(1.05); }
+
+/* 互斥变暗 */
+.split-container:has(.skew-pane:hover) .skew-pane:not(:hover) { opacity: 0.3; filter: grayscale(1); }
+
+.magnet-icon { color: var(--accent-lime); margin-bottom: 1rem; filter: drop-shadow(0 0 5px var(--accent-lime)); }
+.magnet-title { font-size: 1.4rem; font-weight: 700; letter-spacing: 1px; margin-bottom: 5px; font-family: 'Dela Gothic One', sans-serif; }
+.magnet-desc { font-size: 0.8rem; color: var(--text-sub); font-family: monospace; }
+
+/* URL 输入框 (需回正) */
+.url-input-box {
+  display: flex; margin-top: 15px; border-bottom: 2px solid var(--border-tech);
+  transition: all 0.3s; position: relative; z-index: 30;
+}
+.skew-pane:hover .url-input-box { border-color: var(--accent-lime); }
+.url-input-box input {
+  background: transparent; border: none; outline: none; color: var(--text-main);
+  font-family: monospace; padding: 8px 5px; width: 180px; font-size: 0.9rem;
+}
+.url-go-btn {
+  background: transparent; border: none; color: var(--accent-lime); cursor: pointer;
+  padding: 0 8px; opacity: 0.7; transition: all 0.3s;
+}
+.url-go-btn:hover { opacity: 1; transform: translateX(3px); }
+
+/* 处理中状态 */
+.magnet-content.busy {
+  height: 100%; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: var(--bg-card); position: relative; z-index: 50;
+}
+.busy-text { margin-top: 15px; color: var(--accent-lime); font-family: monospace; animation: pulse-lime 2s infinite; }
+/* === [END] 重构结束 === */
+
+.notification-bar { margin-top: 2rem; display: inline-block; background: var(--accent-lime); color: var(--text-inverse); padding: 10px 24px; font-weight: 700; border-radius: 4px; clip-path: polygon(5% 0%, 100% 0%, 95% 100%, 0% 100%); }
+.notification-bar.error { background: #ff4757; color: #fff; }
+
 .quantum-loader { width: 50px; height: 50px; border: 4px solid var(--border-tech); border-top-color: var(--accent-lime); border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 1rem; box-shadow: 0 0 10px var(--accent-lime); }
 .quantum-loader.small { width: 30px; height: 30px; margin: 0 auto; }
-.notification-bar { margin-top: 2rem; display: inline-block; background: var(--accent-lime); color: var(--text-inverse); padding: 10px 24px; font-weight: 700; border-radius: 4px; clip-path: polygon(5% 0%, 100% 0%, 95% 100%, 0% 100%); }
 
 /* Workspace */
 .workspace-section { opacity: 0; animation: slideUpFade 0.8s 0.4s forwards; }
@@ -711,7 +756,7 @@ html, body, #app {
 .section-header h3 { font-size: 1.5rem; font-weight: 700; }
 .count-chip { background: var(--border-tech); padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; font-family: monospace; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
-.project-card { background: var(--bg-card); border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); border: 1px solid var(--border-tech); overflow: hidden; transition: transform 0.2s; }
+.project-card { background: var(--bg-card); border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); border: 1px solid var(--border-tech); overflow: hidden; transition: transform 0.2s; position: relative; }
 .project-card:hover { transform: translateY(-2px); border-color: var(--accent-lime); }
 .card-meta { display: flex; gap: 1.5rem; padding: 1.5rem; align-items: center; border-bottom: 1px solid var(--border-tech); background: rgba(18, 21, 18, 0.5); }
 .meta-icon { width: 56px; height: 56px; background: rgba(197, 249, 70, 0.05); border: 1px solid var(--accent-lime); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--accent-lime); }
@@ -758,56 +803,29 @@ html, body, #app {
 .auth-header { padding: 20px; border-bottom: 1px solid var(--border-tech); display: flex; justify-content: space-between; align-items: center; background: rgba(11,12,16,0.9); }
 .auth-title { font-family: 'Noto Sans SC', sans-serif; font-size: 1.2rem; color: var(--text-main); font-weight: 700; letter-spacing: 1px; }
 .auth-body { padding: 30px; }
-
 .input-group { margin-bottom: 20px; }
 .input-group label { display: block; font-family: 'Noto Sans SC', monospace; color: var(--text-sub); font-size: 0.75rem; margin-bottom: 8px; letter-spacing: 1px; }
 .input-group input { width: 100%; background: #000; border: 1px solid var(--border-tech); padding: 12px; color: var(--text-main); font-family: monospace; font-size: 1rem; outline: none; transition: all 0.3s; }
 .input-group input:focus { border-color: var(--accent-lime); box-shadow: 0 0 10px rgba(197, 249, 70, 0.2); }
-
 .cyber-btn { width: 100%; background: var(--text-main); color: var(--bg-deep); border: none; padding: 12px; font-weight: 700; font-family: 'Noto Sans SC', sans-serif; cursor: pointer; transition: all 0.3s; clip-path: polygon(5% 0%, 100% 0%, 95% 100%, 0% 100%); margin-bottom: 20px; }
 .cyber-btn:hover:not(:disabled) { background: var(--accent-lime); color: var(--text-inverse); box-shadow: 0 0 20px rgba(197, 249, 70, 0.4); }
 .cyber-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
 .auth-toggle { text-align: center; font-size: 0.85rem; font-family: 'Noto Sans SC', sans-serif; color: var(--text-sub); }
 .toggle-link { background: none; border: none; color: var(--accent-lime); cursor: pointer; font-weight: 700; margin-left: 5px; text-decoration: underline; }
 .toggle-link:hover { color: #fff; }
-
 .auth-msg { margin-top: 15px; text-align: center; font-family: 'Noto Sans SC', monospace; font-size: 0.8rem; color: var(--accent-lime); }
 .auth-msg.error { color: #ff4757; }
+
+/* 删除按钮 */
+.delete-btn {
+  position: absolute; top: 10px; right: 10px; background: transparent; border: none;
+  color: #71757a; cursor: pointer; opacity: 0; transition: all 0.3s ease; z-index: 10; padding: 5px;
+}
+.project-card:hover .delete-btn { opacity: 1; }
+.delete-btn:hover { color: #ff4757; transform: scale(1.2) rotate(90deg); }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes slideUpFade { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes pulse-lime { 0% { opacity: 0.5; box-shadow: 0 0 5px var(--accent-lime); } 100% { opacity: 1; box-shadow: 0 0 15px var(--accent-lime); } }
 @keyframes blink { 50% { opacity: 0.5; } }
-
-
-/* --- 删除按钮样式 --- */
-.project-card {
-  position: relative; /* 这一句必须有，不然 X 号会飞到屏幕外面去 */
-}
-
-.delete-btn {
-  position: absolute; /* 绝对定位：固定在右上角 */
-  top: 10px;
-  right: 10px;
-  background: transparent;
-  border: none;
-  color: #71757a; /* 默认灰色 */
-  cursor: pointer;
-  opacity: 0; /* 默认完全透明(看不见) */
-  transition: all 0.3s ease;
-  z-index: 10;
-  padding: 5px;
-}
-
-/* 只有鼠标移入卡片时，X 号才显示出来 */
-.project-card:hover .delete-btn {
-  opacity: 1;
-}
-
-/* 鼠标放在 X 号上时，变红、变大、旋转 */
-.delete-btn:hover {
-  color: #ff4757;
-  transform: scale(1.2) rotate(90deg);
-}
 </style>
