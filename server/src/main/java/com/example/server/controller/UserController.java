@@ -11,22 +11,22 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/user")
-// 加上这个是为了防止跨域问题漏网
+//加上这个是为了防止跨域问题漏网
 @CrossOrigin(originPatterns = "*", allowCredentials = "true")
 public class UserController {
 
     @Autowired(required = false)
     private UserMapper userMapper;
 
-    // === 1. 注册接口 ===
+    //注册接口
     @PostMapping("/register")
     public Map<String, Object> register(@RequestBody User user) {
         Map<String, Object> result = new HashMap<>();
         try {
-            // 打印日志，确认数据进来了
+            //打印日志，确认数据进来了
             System.out.println("收到注册请求: " + user.getUsername());
 
-            // 检查 Mapper 是否注入成功
+            //检查 Mapper 是否注入成功
             if (userMapper == null) {
                 throw new RuntimeException("UserMapper 未注入，请检查 @Mapper 注解！");
             }
@@ -39,19 +39,19 @@ public class UserController {
                 return result;
             }
 
-            // 默认角色
+            //默认角色
             if (user.getNickname() == null || user.getNickname().isEmpty()) {
                 user.setNickname("用户" + System.currentTimeMillis());
             }
             user.setRole("USER");
 
-            userMapper.insert(user); // 关键动作
+            userMapper.insert(user); //关键动作
 
             result.put("code", 200);
             result.put("msg", "注册成功");
             result.put("data", user);
         } catch (Exception e) {
-            // 【关键】如果在黑窗口看到这个报错，就知道原因了
+            //如果在黑窗口看到这个报错，就知道原因了
             e.printStackTrace();
             result.put("code", 500);
             result.put("msg", "后端报错: " + e.getMessage());
@@ -59,7 +59,7 @@ public class UserController {
         return result;
     }
 
-    // === 2. 登录接口 ===
+    //登录接口
     @PostMapping("/login")
     public Map<String, Object> login(@RequestBody User loginUser) {
         Map<String, Object> result = new HashMap<>();

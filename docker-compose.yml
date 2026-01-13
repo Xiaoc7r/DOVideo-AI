@@ -1,0 +1,52 @@
+version: '3'
+services:
+  # 1. RocketMQ NameServer (大脑)
+  rmqnamesrv:
+    image: apache/rocketmq:4.9.4
+    container_name: rmqnamesrv
+    ports:
+      - 9876:9876
+    # 【核心修改】增加内存限制参数：只用 256M
+    environment:
+      - JAVA_OPT_EXT=-server -Xms256m -Xmx256m -Xmn128m
+    command: sh mqnamesrv
+    networks:
+      - my-network
+
+  # 2. RocketMQ Broker (干活的)
+  rmqbroker:
+    image: apache/rocketmq:4.9.4
+    container_name: rmqbroker
+    ports:
+      - 10911:10911
+      - 10909:10909
+    environment:
+      - NAMESRV_ADDR=rmqnamesrv:9876
+      - BROKER_ID=0
+      - BROKER_ROLE=ASYNC_MASTER
+      # 【核心修改】增加内存限制参数：只用 256M (默认是 4G!)
+      - JAVA_OPT_EXT=-server -Xms256m -Xmx256m -Xmn128m
+    volumes:
+      - ./rocketmq/broker.conf:/opt/rocketmq-4.9.4/conf/broker.conf
+    command: sh mqbroker -n rmqnamesrv:9876 -c /opt/rocketmq-4.9.4/conf/broker.conf
+    depends_on:
+      - rmqnamesrv
+    networks:
+      - my-network
+
+  # 3. RocketMQ Dashboard (控制台)
+  rmqdashboard:
+    image: apacherocketmq/rocketmq-dashboard:latest
+    container_name: rmqdashboard
+    ports:
+      - 8180:8082
+    environment:
+      - JAVA_OPTS=-Drocketmq.namesrv.addr=rmqnamesrv:9876
+    depends_on:
+      - rmqnamesrv
+    networks:
+      - my-network
+
+networks:
+  my-network:
+    driver: bridge

@@ -23,9 +23,9 @@ public class AiService {
     @Autowired
     private StringRedisTemplate redisTemplate;
 
-    @Async("aiTaskExecutor")
+
     public void asyncAnalyze(Long mediaId) {
-        System.out.println("🤖 [线程池] 开始处理任务，ID: " + mediaId);
+        System.out.println(" [线程池] 开始处理任务，ID: " + mediaId);
 
         MediaFile mediaFile = mediaFileMapper.selectById(mediaId);
         if (mediaFile == null) return;
@@ -42,9 +42,6 @@ public class AiService {
             // 3. 保存数据库 (这一步你已经成功了)
             mediaFileMapper.updateById(mediaFile);
 
-            // =========================================================
-            // 【核心修复区域】强制删除 Redis 缓存
-            // =========================================================
 
             // 1. 拼装缓存 Key (必须和 MediaController 里的逻辑完全一致！)
             // Controller 里是: "media:list:user:" + (userId == null ? "anon" : userId)
@@ -73,9 +70,9 @@ public class AiService {
         }
     }
 
-    // ... 以前的代码 ...
 
-    // 【新增】异步提取全文 (专门负责提取文字)
+
+    //异步提取全文 (专门负责提取文字)
     @Async("aiTaskExecutor")
     public void asyncTranscribe(Long mediaId) {
         System.out.println(" [线程池] 开始全文提取任务，ID: " + mediaId);
@@ -84,14 +81,14 @@ public class AiService {
         if (mediaFile == null) return;
 
         try {
-            // 1. 只做语音转文字
+            //只做语音转文字
             String text = aiAnalysisStrategy.transcribe(mediaFile.getFilePath());
             mediaFile.setTranscriptText(text);
 
-            // 2. 保存数据库
+            //保存数据库
             mediaFileMapper.updateById(mediaFile);
 
-            // 3. 强制删除 Redis 缓存
+            //强制删除 Redis 缓存
             String userIdStr = (mediaFile.getUserId() == null) ? "anon" : String.valueOf(mediaFile.getUserId());
             String cacheKey = "media:list:user:" + userIdStr;
             redisTemplate.delete(cacheKey);

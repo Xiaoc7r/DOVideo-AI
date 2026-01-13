@@ -16,7 +16,7 @@ import java.util.UUID;
 @Service
 public class MediaService {
 
-    // 注入数据库操作接口 (MyBatis-Plus 自动代理)
+    //注入数据库操作接口 (MyBatis-Plus 自动代理)
     @Autowired
     private MediaFileMapper mediaFileMapper;
 
@@ -28,14 +28,13 @@ public class MediaService {
     }
 
     public String convertVideoToAudio(MultipartFile file) throws IOException, InterruptedException {
-        // --- 数据库操作：插入初始记录 ---
         MediaFile mediaFile = new MediaFile();
         mediaFile.setFilename(file.getOriginalFilename());
-        mediaFile.setStatus("PROCESSING"); // 状态：处理中
+        mediaFile.setStatus("PROCESSING"); //状态：处理中
         mediaFile.setUploadTime(LocalDateTime.now());
-        mediaFile.setFilePath(""); // 暂时为空
+        mediaFile.setFilePath(""); //暂时为空
 
-        // 这一步执行后，MySQL 里就会多一行数据
+        //这一步执行后，MySQL 里就会多一行数据
         mediaFileMapper.insert(mediaFile);
 
         // --- 下面是原有的文件处理逻辑 ---

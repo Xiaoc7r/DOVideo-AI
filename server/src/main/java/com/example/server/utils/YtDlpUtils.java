@@ -29,18 +29,16 @@ public class YtDlpUtils {
         List<String> command = new ArrayList<>();
         command.add(ytDlpPath);
 
-        // 【核心修改】
-        // 1. 删除所有 -f xxx 的限制，让 yt-dlp 自己选最佳兼容格式
-        // 因为 B 站有时没有 "worst"，有时没有 "best[ext=mp4]"，指定越多越容易错
-        // 默认它会下载 bestvideo+bestaudio，如果遇到会员限制，它通常会自动降级或报错
 
-        // 2. 伪装头 (保留，防止直接被 ban)
+        //删除所有 -f xxx 的限制，让 yt-dlp 自己选最佳兼容格式
+        //默认它会下载 bestvideo+bestaudio，如果遇到会员限制，它通常会自动降级或报错
+        //伪装头 (保留，防止直接被 ban)
         command.add("--user-agent");
         command.add("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
         command.add("--referer");
         command.add("https://www.bilibili.com/");
 
-        // 3. 强制转码 mp4 (这是唯一的硬性要求)
+        //强制转码 mp4 (这是唯一的硬性要求)
         command.add("--recode-video");
         command.add("mp4");
 
@@ -50,7 +48,7 @@ public class YtDlpUtils {
         command.add("-o");
         command.add(outputPath);
 
-        // 忽略证书和播放列表
+        //忽略证书和播放列表
         command.add("--no-check-certificate");
         command.add("--no-playlist");
 
@@ -65,7 +63,7 @@ public class YtDlpUtils {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                // 打印 yt-dlp 的关键日志，方便调试
+                //打印yt-dlp的关键日志，方便调试
                 if (line.contains("ERROR") || line.contains("Downloading") || line.contains("[Merger]")) {
                     System.out.println("cmd > " + line);
                 }
@@ -75,7 +73,7 @@ public class YtDlpUtils {
 
         int exitCode = process.waitFor();
         if (exitCode != 0) {
-            // 如果还是失败，抛出异常，前端会显示红色报错
+            //如果还是失败抛出异常，前端会显示红色报错
             throw new RuntimeException("yt-dlp 下载失败: " + logs.toString());
         }
 

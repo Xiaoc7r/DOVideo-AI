@@ -4,7 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
 import com.example.server.utils.MinioUtils;
-import com.example.server.utils.YtDlpUtils; // 确保导入这个
+import com.example.server.utils.YtDlpUtils; //确保导入这个
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -12,7 +12,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.File; // 【关键】之前可能缺这个导致爆红
+import java.io.File;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -36,7 +36,7 @@ public class MediaController {
     @Autowired
     private YtDlpUtils ytDlpUtils;
 
-    // === 1. 普通文件上传接口 ===
+
     @PostMapping("/upload")
     public String upload(@RequestParam("file") MultipartFile file,
                          @RequestParam(value = "userId", required = false) Long userId) {
@@ -70,7 +70,7 @@ public class MediaController {
         }
     }
 
-    // === 2. 视频链接上传接口 (修复版：状态码控制) ===
+    // === 视频链接上传接口 (修复版：状态码控制) ===
     @PostMapping("/upload-url")
     public org.springframework.http.ResponseEntity<String> uploadUrl(@RequestParam("url") String url,
                                                                      @RequestParam(value = "userId", required = false) Long userId) {
@@ -117,7 +117,7 @@ public class MediaController {
         }
     }
 
-    // === 3. 列表接口 ===
+    //列表接口
     @GetMapping("/list")
     public List<MediaFile> getList(@RequestParam(value = "userId", required = false) Long userId) {
         String cacheKey = "media:list:user:" + (userId == null ? "anon" : userId);
@@ -151,7 +151,7 @@ public class MediaController {
         return list;
     }
 
-    // === 4. 删除接口 ===
+    //删除接口
     @DeleteMapping("/delete")
     public String delete(@RequestParam("id") Long id,
                          @RequestParam(value = "userId", required = false) Long userId) {

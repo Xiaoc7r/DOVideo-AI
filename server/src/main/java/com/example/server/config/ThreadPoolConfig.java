@@ -9,20 +9,14 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadPoolExecutor;
 
 @Configuration
-@EnableAsync // 【关键】开启异步注解支持
+@EnableAsync //开启异步注解支持
 public class ThreadPoolConfig {
 
-    @Bean("aiTaskExecutor") // 给线程池起个名，方便调用
+    @Bean("aiTaskExecutor") //给线程池起个名
     public Executor aiTaskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 
-        // === 核心参数配置 (面试必问) ===
-
-        // 1. 核心线程数：平时保留的干活人数
-        // 设置为 4 (假设你的电脑是 4 核，或者因为 FFmpeg 是 IO/CPU 混合型，设为 4-8 都可以)
         executor.setCorePoolSize(4);
-
-        // 2. 最大线程数：忙不过来时，最多雇多少人
         executor.setMaxPoolSize(8);
 
         // 3. 队列容量：如果 8 个人都忙，新的任务在门口排队，最多排 100 个

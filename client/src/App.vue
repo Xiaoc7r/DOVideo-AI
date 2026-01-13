@@ -37,7 +37,7 @@
     <main class="main-container">
       <section class="hero-section">
         <h1 class="slogan-main">DECODE YOUR VIDEO</h1>
-        <p class="slogan-sub">影音重构 · 算力赋能</p>
+        <p class="slogan-sub">影视重构 · 算力赋能</p>
 
         <div class="upload-wrapper">
           <input
@@ -72,7 +72,7 @@
               <div class="skew-pane pane-url">
                 <div class="pane-content unskew">
                   <div class="magnet-icon">
-                    <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                    <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"></path></svg>
                   </div>
                   <span class="magnet-title">WEB LINK</span>
                   <span class="magnet-desc">B站 / YouTube / 抖音</span>
@@ -95,7 +95,7 @@
 
             <div class="magnet-content busy" v-else>
               <div class="quantum-loader"></div>
-              <span class="busy-text">正在建立加密通道并解析资源...</span>
+              <span class="busy-text">正在建立通道并解析资源...</span>
             </div>
 
             <div class="border-glow"></div>
@@ -237,7 +237,6 @@ import { marked } from 'marked'
 
 // --- 变量定义 ---
 const file = ref(null)
-// 【补全 URL 逻辑】虽然你给的标准代码没包含这个，但为了 template 能跑，必须加回来
 const videoUrl = ref('')
 const message = ref('')
 const uploading = ref(false)
@@ -324,7 +323,7 @@ const uploadFile = async () => {
   }
 }
 
-// 【链接上传 - 补全逻辑】
+// 【链接上传 - 修复版】
 const handleUrlUpload = async () => {
   if (!videoUrl.value) return
 
@@ -341,7 +340,7 @@ const handleUrlUpload = async () => {
   }
 
   uploading.value = true
-  message.value = '正在解析链接并极速下载...'
+  message.value = '正在解析链接并极速下载 (低码率模式)...'
 
   const formData = new FormData()
   formData.append('url', videoUrl.value)
@@ -352,6 +351,7 @@ const handleUrlUpload = async () => {
       method: 'POST',
       body: formData
     })
+    // 【关键修复】现在后端会返回 500 状态码，这里能正确捕获错误了
     const text = await res.text()
     if (!res.ok) throw new Error(text)
 
@@ -378,9 +378,13 @@ const fetchList = async () => {
   try {
     let url = 'http://localhost:9090/media/list'
     if (currentUser.value) {
-      url += `?userId=${currentUser.value.id}`
+      // 【核心修改】加一个 _t 时间戳，强制浏览器每次都发新请求，不许读缓存！
+      const timestamp = new Date().getTime()
+      url += `?userId=${currentUser.value.id}&_t=${timestamp}`
+
       const res = await fetch(url)
       const data = await res.json()
+      // 倒序排列，新的在前面
       list.value = data.reverse()
     } else {
       list.value = []
@@ -463,26 +467,52 @@ const transcribe = async (id) => {
   }
 }
 
+// === 【核心修改】AI 分析函数，增加限流/锁错误的处理 ===
 const aiAnalyze = async (id) => {
   const item = list.value.find(i => i.id === id)
+
+  // 1. 如果已经有结果，直接显示
   if (item && item.aiSummary && !item.aiSummary.includes("任务已") && !item.aiSummary.includes("正在")) {
     openSidebar('ai', 'AI 智能总结')
     sidebar.value.content = item.aiSummary
     sidebar.value.loading = false
     return
   }
+
+  // 2. 如果正在轮询，直接打开侧边栏
   if (pollingTimers.value[id] && pollingTimers.value[id].type === 'ai') {
     openSidebar('ai', 'AI 智能总结')
     sidebar.value.loading = true
     sidebar.value.content = "🚀 系统正在后台拼命计算中...\n\n(任务正在进行，无需重复提交)"
     return
   }
+
+  // 3. 准备提交请求，打开侧边栏loading
   openSidebar('ai', 'AI 智能总结')
   sidebar.value.loading = true
-  sidebar.value.content = "🚀 任务已提交至后台，系统正在全力计算中..."
+  sidebar.value.content = "🚀 正在向分布式集群请求计算资源..."
+
   try {
-    await fetch(`http://localhost:9090/debug/ai?id=${id}`)
+    // 请求后端
+    const res = await fetch(`http://localhost:9090/debug/ai?id=${id}`)
+    const text = await res.text()
+
+    // 4. 【关键逻辑】检查后端返回的文本
+    // 如果包含 "⚠️" (限流/锁) 或者 "❌" (报错)，说明任务被拒绝了
+    if (text.includes("⚠️") || text.includes("❌")) {
+      // 弹窗提示错误
+      showMsg(text, true)
+      // 关闭侧边栏，因为任务其实没开始
+      sidebar.value.visible = false
+      sidebar.value.loading = false
+      return
+    }
+
+    // 5. 如果成功 (包含 "✅" 或 "🚀")，开始轮询
     startPolling(id, 'ai')
+    // 在侧边栏显示后端返回的提示 (比如 "✅ 任务已投递至 RocketMQ")
+    sidebar.value.content = text + "\n\n⏳ 等待消费者接单处理..."
+
   } catch (e) {
     sidebar.value.content = "Error: " + e
     sidebar.value.loading = false
@@ -490,36 +520,66 @@ const aiAnalyze = async (id) => {
 }
 
 const startPolling = (id, type) => {
+  // 清理旧定时器
   if (pollingTimers.value[id]) clearInterval(pollingTimers.value[id].timer)
   console.log(`[轮询] 开始监听任务 ID: ${id}, 类型: ${type}`)
+
   const timer = setInterval(async () => {
+    // 1. 强制刷新列表 (带时间戳防止缓存)
     await fetchList()
     const item = list.value.find(i => i.id === id)
     if (!item) return
+
     let isFinished = false
     let result = ''
+
     if (type === 'ai') {
-      if (item.aiSummary && !item.aiSummary.includes("任务已") && !item.aiSummary.includes("正在")) {
+      const text = item.aiSummary || ''
+
+      // 【核心修改】纯文本判断逻辑，绝对不使用 Emoji
+      // 条件1: 成功 (包含 Markdown 的标题特征 "##")
+      const isSuccess = text.includes("##");
+      // 条件2: 失败 (包含错误关键词)
+      const isError = text.includes("失败") || text.includes("Error") || text.includes("超时") || text.includes("500");
+
+      // 只要是成功或失败，都视为“结束”，停止轮询
+      if (isSuccess || isError) {
         isFinished = true
-        result = item.aiSummary
+        result = text
       }
+
     } else if (type === 'text') {
-      if (item.transcriptText) {
+      const text = item.transcriptText || ''
+      // 文字提取同理：如果有内容且长度足够，或者报错，就停止
+      if (text && (text.length > 10 || text.includes("失败"))) {
         isFinished = true
-        result = item.transcriptText
+        result = text
       }
     }
+
+    // 2. 结算
     if (isFinished) {
-      if (sidebar.value.visible && sidebar.value.type === type) {
+      // 如果侧边栏正开着，更新内容
+      if (sidebar.value.visible && sidebar.value.title.includes(type === 'ai' ? 'AI' : '文字')) {
         sidebar.value.content = result
         sidebar.value.loading = false
       }
-      showMsg(`✅ 任务完成`)
+
+      // 只有成功才提示完成，报错则提示警告
+      if (result.includes("失败") || result.includes("Error")) {
+        showMsg("⚠️ 任务结束，但存在错误", true)
+      } else {
+        showMsg("✅ 任务完成")
+      }
+
       clearInterval(timer)
       delete pollingTimers.value[id]
     }
-  }, 3000)
+  }, 3000) // 3秒轮询一次
+
   pollingTimers.value[id] = { timer, type }
+
+  // 5分钟强制兜底停止
   setTimeout(() => {
     if (pollingTimers.value[id]) {
       clearInterval(pollingTimers.value[id].timer)

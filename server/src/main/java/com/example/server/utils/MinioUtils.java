@@ -67,9 +67,9 @@ public class MinioUtils {
                             .build()
             );
 
-            System.out.println("🗑️ MinIO 文件已删除: " + objectName);
+            System.out.println(" MinIO 文件已删除: " + objectName);
         } catch (Exception e) {
-            System.err.println("❌ MinIO 删除失败: " + e.getMessage());
+            System.err.println(" MinIO 删除失败: " + e.getMessage());
         }
     }
 

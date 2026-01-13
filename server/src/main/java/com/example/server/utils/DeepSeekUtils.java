@@ -20,9 +20,10 @@ public class DeepSeekUtils {
     private String baseUrl;
 
     // 配置 HTTP 客户端，超时时间设置长一点，因为 AI 思考需要时间
-    private final OkHttpClient client = new OkHttpClient.Builder()
+
+    private static final OkHttpClient client = new OkHttpClient.Builder()
             .connectTimeout(60, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(300, TimeUnit.SECONDS)  // 给 AI 5分钟思考时间
             .writeTimeout(60, TimeUnit.SECONDS)
             .build();
 
@@ -30,11 +31,9 @@ public class DeepSeekUtils {
      * 真·AI 深度思考
      */
     public String analyzeContent(String content) {
-        // 1. 准备请求地址
+
         String url = baseUrl + "/chat/completions";
-
-
-        // 2. 准备系统提示词 (Ver. A - 结构化洞察专家)
+        //提示词自由发挥，善于利用AI。
         String systemPrompt = """
     # Role
     你是一位拥有认知心理学背景的资深信息架构师。你的专长是从杂乱的语音转录文本中提取高价值信息，并进行逻辑重构。
@@ -55,10 +54,10 @@ public class DeepSeekUtils {
     请严格按照以下模块输出：
 
     ## 核心摘要
-    （极度精简概括视频到底讲了什么，直击本质，一针见血地概括视频主旨。）
+    （精简概括视频到底讲了什么，直击本质，全面贴切，但要一针见血地概括视频主旨。）
 
     ## 深度洞察
-    （提取 3-4 个核心观点，每个观点使用三级标题格式，如下所示：）
+    （提取 3-5 个核心观点，每个观点使用三级标题格式，如下所示：）
                    
     ### 1. [这里提炼一个 4-8 字的强观点标题]
     不要复述原话。请用专业的语言解释这个观点背后的逻辑、动因或对观众的启示。分析要犀利，直击本质。
@@ -67,11 +66,11 @@ public class DeepSeekUtils {
     （此处填写对应的深度分析...）
                    
     ### 3. [第三个强观点标题]
-    （此处填写对应的深度分析...）
+    （此处填写对应的深度分析...）(后续标题和分析同理)
 
     ## 原始内容精选
     > "引用视频中原本的最有价值的一句原话（修正错别字后）"
-    > "引用第二句有价值的原话"（如果有，不一定必须精选）
+    > "引用第二句有价值的原话"（如果有，不一定必须精选，后续同理，但原始内容精选最多三个）
 
     ## 🏷️ 领域标签
     #标签1 #标签2 #标签3

@@ -33,18 +33,18 @@ public class AliyunDeepSeekStrategy implements AiAnalysisStrategy {
         return deepSeekUtils.analyzeContent("请对以下视频提取的文字进行总结，不需要废话，直接列出核心观点：\n" + text);
     }
 
-    // === 私有辅助方法 ===
+
     private String processVideoToText(String inputPath) {
-        // 1. 简单检查
+        //简单检查
         if (inputPath == null || inputPath.isEmpty()) return "❌ 路径为空";
 
-        // 如果是本地路径且不存在，报错；如果是 http 链接，跳过检查直接交给 FFmpeg
+        //如果是本地路径且不存在，报错；如果是 http 链接，跳过检查直接交给 FFmpeg
         if (!inputPath.startsWith("http")) {
             File localFile = new File(inputPath);
             if (!localFile.exists()) return "❌ 磁盘找不到文件: " + inputPath;
         }
 
-        // 2. 准备临时 MP3 路径 (放在系统临时目录下)
+        //准备临时 MP3 路径 (放在系统临时目录下)
         String outputMp3Path = System.getProperty("java.io.tmpdir") + File.separator + "temp_" + UUID.randomUUID() + ".mp3";
 
         try {
@@ -52,7 +52,7 @@ public class AliyunDeepSeekStrategy implements AiAnalysisStrategy {
 
             // 3. 提取音频 (FFmpeg 原生支持 HTTP URL，这里直接传进去)
             boolean success = extractAudio(inputPath, outputMp3Path);
-            if (!success) return "❌ FFmpeg 转换失败 (可能是网络超时或文件损坏)";
+            if (!success) return "FFmpeg 转换失败 (可能是网络超时或文件损坏)";
 
             // 4. 语音转文字
             String text = aliyunAsrUtils.audioToText(outputMp3Path);
@@ -60,7 +60,7 @@ public class AliyunDeepSeekStrategy implements AiAnalysisStrategy {
 
         } catch (Exception e) {
             e.printStackTrace();
-            return "❌ 处理异常: " + e.getMessage();
+            return "处理异常: " + e.getMessage();
         } finally {
             // 5. 清理临时文件
             File mp3 = new File(outputMp3Path);
@@ -76,7 +76,7 @@ public class AliyunDeepSeekStrategy implements AiAnalysisStrategy {
             command.add("ffmpeg");
             command.add("-y");
             command.add("-i");
-            command.add(inputPath); // 这里 inputPath 可能是 http://...
+            command.add(inputPath);
             command.add("-vn");
             command.add("-acodec");
             command.add("libmp3lame");
@@ -89,7 +89,7 @@ public class AliyunDeepSeekStrategy implements AiAnalysisStrategy {
             pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
 
             process = pb.start();
-            // 网络流可能比较慢，给多点时间 (15分钟)
+            //网络流可能比较慢，给多点时间
             boolean finished = process.waitFor(15, java.util.concurrent.TimeUnit.MINUTES);
 
             if (finished) {

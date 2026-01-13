@@ -13,61 +13,71 @@ import java.util.concurrent.TimeUnit;
 @Component
 public class AliyunAsrUtils {
 
-    // 复用你的 DeepSeek Key (因为它们是一家公司的服务)
     @Value("${ai.deepseek.api-key}")
     private String apiKey;
 
     private final OkHttpClient client = new OkHttpClient.Builder()
-            .connectTimeout(60, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .writeTimeout(60, TimeUnit.SECONDS)
+            .connectTimeout(120, TimeUnit.SECONDS)
+            .readTimeout(600, TimeUnit.SECONDS)
+            .writeTimeout(600, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
             .build();
 
     public String audioToText(String filePath) {
         File file = new File(filePath);
-        if (!file.exists()) {
-            return "❌ 错误：找不到文件 -> " + filePath;
-        }
+        if (!file.exists()) return "❌ 错误：找不到文件";
 
-        // 1. 准备请求地址 (硅基流动官方语音识别接口)
         String url = "https://api.siliconflow.cn/v1/audio/transcriptions";
+        int maxRetries = 3; // 最大重试次数
+        String lastError = "";
 
-        // 2. 构造请求体 (上传文件 + 指定模型)
-        // 使用 SenseVoiceSmall 模型，速度快，效果好
-        RequestBody requestBody = new MultipartBody.Builder()
-                .setType(MultipartBody.FORM)
-                .addFormDataPart("file", file.getName(),
-                        RequestBody.create(file, MediaType.parse("application/octet-stream")))
-                .addFormDataPart("model", "FunAudioLLM/SenseVoiceSmall")
-                //FunAudioLLM/SenseVoiceSmall
-                .build();
+        for (int i = 0; i < maxRetries; i++) {
+            try {
+                System.out.println("🎤 [ASR] 上传中 (第 " + (i + 1) + " 次尝试)...");
 
-        // 3. 构造请求
-        Request request = new Request.Builder()
-                .url(url)
-                .addHeader("Authorization", "Bearer " + apiKey) // 用的是 DeepSeek 的 Key
-                .post(requestBody)
-                .build();
+                RequestBody requestBody = new MultipartBody.Builder()
+                        .setType(MultipartBody.FORM)
+                        .addFormDataPart("file", file.getName(),
+                                RequestBody.create(file, MediaType.parse("application/octet-stream")))
+                        // 【核心修改】换成电信的大模型，更稳，准确率更高
+                        .addFormDataPart("model", "TeleAI/TeleSpeechASR")
+                        .build();
 
-        // 4. 发送并解析
-        try (Response response = client.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                return "❌ 语音识别失败: " + response.code() + " - " + response.message();
+                Request request = new Request.Builder()
+                        .url(url)
+                        .addHeader("Authorization", "Bearer " + apiKey)
+                        .post(requestBody)
+                        .build();
+
+                try (Response response = client.newCall(request).execute()) {
+                    if (response.isSuccessful()) {
+                        String resultJson = response.body().string();
+                        JSONObject jsonObject = JSON.parseObject(resultJson);
+                        if (jsonObject.containsKey("text")) {
+                            return jsonObject.getString("text");
+                        }
+                    } else {
+                        // 如果是 500 错误，记录并重试
+                        String errBody = response.body() != null ? response.body().string() : "";
+                        lastError = "HTTP " + response.code() + ": " + errBody;
+                        System.err.println("⚠️ ASR 失败 (" + (i + 1) + "/" + maxRetries + "): " + lastError);
+
+                        // 遇到 500/502/503 等服务端错误，等待 2 秒再重试
+                        if (response.code() >= 500) {
+                            Thread.sleep(2000);
+                            continue;
+                        } else {
+                            // 如果是 400/401 等客户端错误，直接退出不重试
+                            return "❌ 识别失败: " + lastError;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                lastError = e.getMessage();
+                System.err.println("⚠️ 网络异常 (" + (i + 1) + "/" + maxRetries + "): " + lastError);
             }
-
-            String resultJson = response.body().string();
-            JSONObject jsonObject = JSON.parseObject(resultJson);
-
-            // 提取文字
-            if (jsonObject.containsKey("text")) {
-                return jsonObject.getString("text");
-            } else {
-                return "识别结果为空: " + resultJson;
-            }
-
-        } catch (IOException e) {
-            e.printStackTrace();
-            return "❌ 网络请求出错: " + e.getMessage();
         }
+
+        return "❌ 最终失败 (重试3次): " + lastError;
     }
 }

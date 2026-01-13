@@ -26,21 +26,19 @@ public class MinioConfig {
     @Bean
     public MinioClient minioClient() {
         try {
-            // 1. 构建客户端
             MinioClient client = MinioClient.builder()
                     .endpoint(endpoint)
                     .credentials(accessKey, secretKey)
                     .build();
 
-            // 2. 检查桶是否存在，不存在就创建
+            //检查桶是否存在，不存在就创建
             boolean found = client.bucketExists(BucketExistsArgs.builder().bucket(bucketName).build());
             if (!found) {
                 System.out.println("⚠️ MinIO 桶 [" + bucketName + "] 不存在，正在创建...");
                 client.makeBucket(MakeBucketArgs.builder().bucket(bucketName).build());
             }
 
-            // 3. 【核心】强制设置权限为 Public (只读权限)
-            // 这段 JSON 是标准的 AWS S3 访问策略，允许任何人(Principal: *) 下载(Action: GetObject)
+            //强制设置权限为 Public (只读权限)
             String policyJson = "{\n" +
                     "  \"Version\": \"2012-10-17\",\n" +
                     "  \"Statement\": [\n" +
@@ -68,7 +66,7 @@ public class MinioConfig {
                             .build()
             );
 
-            System.out.println("✅ MinIO 配置成功，桶权限已强制设置为 Public！");
+            System.out.println(" MinIO 配置成功，桶权限已强制设置为 Public！");
             return client;
 
         } catch (Exception e) {
