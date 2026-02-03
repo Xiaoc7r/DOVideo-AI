@@ -19,7 +19,7 @@
       <img src="https://img.shields.io/badge/Redisson-Lock-red" alt="Redisson">
     </a>
     <a href="https://github.com/Xiaoc7r/DOVideo-AI">
-      <img src="https://img.shields.io/badge/C-AI-blueviolet" alt="LangChain4j">
+      <img src="https://img.shields.io/badge/LangChain4j-AI-blueviolet" alt="LangChain4j">
     </a>
     <a href="https://github.com/Xiaoc7r/DOVideo-AI">
       <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License">
