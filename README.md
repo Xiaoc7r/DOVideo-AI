@@ -101,44 +101,35 @@ Docker
 Vue 3 + Vite 
 
 <br/>
+不严谨流程图
 
+```mermaid
+graph TD
+    A[客户端发起请求] --> B{Redis令牌桶限流}
+    B -- 超过阈值 --> C[拒绝请求 保障可用性]
+    B -- 获取令牌 --> D[分片并发上传]
+    D --> E(Redis记录分片状态断点续传)
+    E --> F[文件上传并合并完成]
+    
+    F --> G[封装元数据投递RocketMQ]
+    G --> H[上传接口立即返回 小于50ms]
 
-```bash
+    G --> I[消费者异步拉取消息]
+    I --> J{计算文件MD5查询去重}
+    J -- 命中记录 --> K[直接关联并返回历史结果]
+    J -- 全新视频 --> L[加Redisson分布式锁]
+    
+    L --> M(WatchDog机制防止长耗时锁过期)
+    M --> N[调用FFmpeg提取音频]
+    N --> O[请求硅基流动API生成字幕与总结]
+    O --> P(指数退避重试兜底网络抖动)
+    P --> Q[保存结果释放锁并清理资源]
 
-├── common               
-├── config               
-│   ├── MinioConfig
-│   ├── RedisConfig
-│   ├── RedissonConfig
-│   ├── RocketMQConfig
-│   └── WebConfig  
-├── controller           
-│   ├── AuthController
-│   ├── VideoController  
-│   └── TestController  
-├── entity               
-├── mapper               
-├── service              
-│   ├── impl
-│   │   └── VideoServiceImpl
-│   ├── VideoService
-│   └── RocketMQConsumer
-└── utils                
-    ├── FFmpegUtils     
-    ├── FileUtils
-    ├── JwtUtils
-    ├── RedisUtils    
-    └── AiUtils        
-src/main/resources
-├── mapper               
-├── application.yml
-└── lock.lua             
+    R[用户发起智能问答] --> S[Redis获取最近十轮对话]
+    S --> T[触发Function Calling机制]
+    T --> U[数据库检索相关视频信息]
+    U --> V[大模型结合上下文生成回复]
 ```
-
-
-
-
-
 
 <br/>
 
@@ -165,7 +156,9 @@ src/main/resources
 ## 如何本地部署
 
 ### 中间件部署 (Docker Compose)
-本项目依赖多个中间件，已封装为 Docker Compose 文件。请确保本地已安装 Docker Desktop。
+本项目依赖多个中间件封装为 Docker Compose 文件。
+
+
 
 ```bash
 # 在项目的根目录下，直接一键启动所有服务
