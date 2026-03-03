@@ -36,15 +36,16 @@ public class MinioUtils {
         String newFilename = UUID.randomUUID().toString() + suffix;
 
         // 2. 上传到 MinIO
-        InputStream inputStream = file.getInputStream();
-        minioClient.putObject(
-                PutObjectArgs.builder()
-                        .bucket(bucketName)
-                        .object(newFilename)
-                        .stream(inputStream, file.getSize(), -1)
-                        .contentType(file.getContentType())
-                        .build()
-        );
+        try (InputStream inputStream = file.getInputStream()) {
+            minioClient.putObject(
+                    PutObjectArgs.builder()
+                            .bucket(bucketName)
+                            .object(newFilename)
+                            .stream(inputStream, file.getSize(), -1)
+                            .contentType(file.getContentType())
+                            .build()
+            );
+        }
 
         // 3. 拼接返回 Public 访问地址
         return endpoint + "/" + bucketName + "/" + newFilename;
@@ -77,17 +78,16 @@ public class MinioUtils {
      * 【新增】上传本地 File 对象到 MinIO
      */
     public String uploadLocalFile(java.io.File file) throws Exception {
-        java.io.FileInputStream inputStream = new java.io.FileInputStream(file);
-
-        minioClient.putObject(
-                io.minio.PutObjectArgs.builder()
-                        .bucket(bucketName)
-                        .object(file.getName()) // 文件名已经包含 UUID
-                        .stream(inputStream, file.length(), -1)
-                        .contentType("video/mp4") // 默认当 mp4 处理
-                        .build()
-        );
-        inputStream.close();
+        try (java.io.FileInputStream inputStream = new java.io.FileInputStream(file)) {
+            minioClient.putObject(
+                    io.minio.PutObjectArgs.builder()
+                            .bucket(bucketName)
+                            .object(file.getName()) // 文件名已经包含 UUID
+                            .stream(inputStream, file.length(), -1)
+                            .contentType("video/mp4") // 默认当 mp4 处理
+                            .build()
+            );
+        }
 
         return endpoint + "/" + bucketName + "/" + file.getName();
     }

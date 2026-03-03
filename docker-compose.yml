@@ -1,19 +1,71 @@
 version: '3'
 services:
-  # 1. RocketMQ NameServer (大脑)
+  # =========================================
+  # 1. MySQL (数据库)
+  # =========================================
+  mysql:
+    image: mysql:8.0
+    container_name: mysql-media
+    ports:
+      - "3307:3306"  # 你的配置里用的是 3307
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=media_db
+      - TZ=Asia/Shanghai
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - ./mysql/data:/var/lib/mysql
+      - ./mysql/logs:/var/log/mysql
+    networks:
+      - my-network
+
+  # =========================================
+  # 2. Redis (缓存 & 分布式锁)
+  # =========================================
+  redis:
+    image: redis:latest
+    container_name: redis-media
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    networks:
+      - my-network
+
+  # =========================================
+  # 3. MinIO (对象存储)
+  # =========================================
+  minio:
+    image: minio/minio
+    container_name: minio
+    ports:
+      - "9000:9000"  # API 端口
+      - "9001:9001"  # 控制台端口
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - ./minio/data:/data
+    networks:
+      - my-network
+
+  # =========================================
+  # 4. RocketMQ NameServer (大脑)
+  # =========================================
   rmqnamesrv:
     image: apache/rocketmq:4.9.4
     container_name: rmqnamesrv
     ports:
       - 9876:9876
-    # 【核心修改】增加内存限制参数：只用 256M
     environment:
       - JAVA_OPT_EXT=-server -Xms256m -Xmx256m -Xmn128m
     command: sh mqnamesrv
     networks:
       - my-network
 
-  # 2. RocketMQ Broker (干活的)
+  # =========================================
+  # 5. RocketMQ Broker (干活的)
+  # =========================================
   rmqbroker:
     image: apache/rocketmq:4.9.4
     container_name: rmqbroker
@@ -24,7 +76,6 @@ services:
       - NAMESRV_ADDR=rmqnamesrv:9876
       - BROKER_ID=0
       - BROKER_ROLE=ASYNC_MASTER
-      # 【核心修改】增加内存限制参数：只用 256M (默认是 4G!)
       - JAVA_OPT_EXT=-server -Xms256m -Xmx256m -Xmn128m
     volumes:
       - ./rocketmq/broker.conf:/opt/rocketmq-4.9.4/conf/broker.conf
@@ -34,7 +85,9 @@ services:
     networks:
       - my-network
 
-  # 3. RocketMQ Dashboard (控制台)
+  # =========================================
+  # 6. RocketMQ Dashboard (可视化控制台)
+  # =========================================
   rmqdashboard:
     image: apacherocketmq/rocketmq-dashboard:latest
     container_name: rmqdashboard
