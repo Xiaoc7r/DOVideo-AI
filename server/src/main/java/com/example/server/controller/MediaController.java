@@ -3,16 +3,19 @@ package com.example.server.controller;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
+import com.example.server.service.MediaService;
 import com.example.server.utils.MinioUtils;
 import com.example.server.utils.YtDlpUtils; //确保导入这个
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -36,19 +39,35 @@ public class MediaController {
     @Autowired
     private YtDlpUtils ytDlpUtils;
 
+    @Autowired
+    private MediaService mediaService;
+
+    @PostMapping("/init-upload")
+    public ResponseEntity<String> initUpload() {
+        String uploadId = mediaService.initChunkedUpload();
+        return ResponseEntity.ok(uploadId);
+    }
+
 
     @PostMapping("/upload")
-    public String upload(@RequestParam("file") MultipartFile file,
-                         @RequestParam(value = "userId", required = false) Long userId) {
+    public ResponseEntity<String> upload(@RequestParam("file") MultipartFile file,
+                                         @RequestParam(value = "userId", required = false) Long userId) {
+        if (file == null || file.isEmpty()) {
+            return ResponseEntity.badRequest().body("Upload failed: file is empty");
+        }
+        if (mediaFileMapper == null) {
+            return ResponseEntity.status(500).body("Upload failed: database not ready");
+        }
         try {
-            System.out.println("正在上传到 MinIO...");
+            System.out.println("Uploading to MinIO...");
             String fileUrl = minioUtils.uploadFile(file);
-            System.out.println("MinIO 上传成功，地址: " + fileUrl);
+            System.out.println("MinIO upload success, url: " + fileUrl);
 
             MediaFile mediaFile = new MediaFile();
             mediaFile.setFilename(file.getOriginalFilename());
             mediaFile.setFilePath(fileUrl);
             mediaFile.setStatus("COMPLETED");
+            mediaFile.setUploadTime(LocalDateTime.now());
 
             if (userId != null) {
                 mediaFile.setUserId(userId);
@@ -59,36 +78,39 @@ public class MediaController {
             if (userId != null) {
                 String cacheKey = "media:list:user:" + userId;
                 redisTemplate.delete(cacheKey);
-                System.out.println("缓存已清除: " + cacheKey);
+                System.out.println("Cache cleared: " + cacheKey);
             }
 
-            return "上传成功";
+            return ResponseEntity.ok("Upload success");
 
         } catch (Exception e) {
             e.printStackTrace();
-            return "上传失败: " + e.getMessage();
+            return ResponseEntity.status(500).body("Upload failed: " + e.getMessage());
         }
     }
 
-    // === 视频链接上传接口 (修复版：状态码控制) ===
     @PostMapping("/upload-url")
     public org.springframework.http.ResponseEntity<String> uploadUrl(@RequestParam("url") String url,
                                                                      @RequestParam(value = "userId", required = false) Long userId) {
         File tempFile = null;
         try {
-            System.out.println("🔗 收到链接上传请求: " + url);
+            if (url == null || url.isBlank()) {
+                return org.springframework.http.ResponseEntity.badRequest().body("Upload failed: url is empty");
+            }
+            if (mediaFileMapper == null) {
+                return org.springframework.http.ResponseEntity.status(500).body("Upload failed: database not ready");
+            }
+            System.out.println("Received upload url: " + url);
 
-            // 1. 调用 yt-dlp 下载 (后面我们会改 Utils 让他下最低画质)
             tempFile = ytDlpUtils.downloadVideo(url);
 
-            // 2. 上传到 MinIO
             String fileUrl = minioUtils.uploadLocalFile(tempFile);
 
-            // 3. 存数据库
             MediaFile mediaFile = new MediaFile();
             mediaFile.setFilename("WEB_" + tempFile.getName());
             mediaFile.setFilePath(fileUrl);
             mediaFile.setStatus("COMPLETED");
+            mediaFile.setUploadTime(LocalDateTime.now());
 
             if (userId != null) {
                 mediaFile.setUserId(userId);
@@ -96,20 +118,17 @@ public class MediaController {
 
             mediaFileMapper.insert(mediaFile);
 
-            // 4. 清缓存
             if (userId != null) {
                 String cacheKey = "media:list:user:" + userId;
                 redisTemplate.delete(cacheKey);
-                System.out.println("缓存已清除: " + cacheKey);
+                System.out.println("Cache cleared: " + cacheKey);
             }
 
-            // 【关键】成功返回 200
-            return org.springframework.http.ResponseEntity.ok("上传成功");
+            return org.springframework.http.ResponseEntity.ok("Upload success");
 
         } catch (Exception e) {
             e.printStackTrace();
-            // 【关键】失败返回 500，前端 fetch 会抛出异常
-            return org.springframework.http.ResponseEntity.status(500).body("上传失败: " + e.getMessage());
+            return org.springframework.http.ResponseEntity.status(500).body("Upload failed: " + e.getMessage());
         } finally {
             if (tempFile != null && tempFile.exists()) {
                 tempFile.delete();
@@ -117,7 +136,6 @@ public class MediaController {
         }
     }
 
-    //列表接口
     @GetMapping("/list")
     public List<MediaFile> getList(@RequestParam(value = "userId", required = false) Long userId) {
         String cacheKey = "media:list:user:" + (userId == null ? "anon" : userId);
