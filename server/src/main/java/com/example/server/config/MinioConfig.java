@@ -66,7 +66,7 @@ public class MinioConfig {
                             .build()
             );
 
-            System.out.println(" MinIO 配置成功，桶权限已强制设置为 Public！");
+            System.out.println("  MinIO 配置成功，桶权限已强制设置为 Public！");
             return client;
 
         } catch (Exception e) {
