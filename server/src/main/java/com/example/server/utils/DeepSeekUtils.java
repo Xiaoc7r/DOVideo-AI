@@ -1,5 +1,8 @@
 package com.example.server.utils;
 
+import com.example.server.dto.AnalysisResult;
+import com.example.server.dto.VideoContext;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,15 +31,18 @@ public class DeepSeekUtils {
             """;
 
     private final ChatModel chatModel;
+    private final ObjectMapper objectMapper;
 
     public DeepSeekUtils(@Value("${ai.deepseek.api-key}") String apiKey,
                          @Value("${ai.deepseek.base-url}") String baseUrl,
-                         @Value("${ai.deepseek.model:deepseek-ai/DeepSeek-R1-Distill-Qwen-32B}") String modelName) {
+                         @Value("${ai.deepseek.model:deepseek-ai/DeepSeek-R1-Distill-Qwen-32B}") String modelName,
+                         ObjectMapper objectMapper) {
         this.chatModel = OpenAiChatModel.builder()
                 .baseUrl(baseUrl)
                 .apiKey(apiKey)
                 .modelName(modelName)
                 .build();
+        this.objectMapper = objectMapper;
     }
 
     public String analyzeContent(String content) {
@@ -44,5 +50,35 @@ public class DeepSeekUtils {
             return "无法提取有效信息";
         }
         return chatModel.chat(SYSTEM_PROMPT + "\n\n待分析文本：\n" + content);
+    }
+
+    public AnalysisResult analyzeVideoContext(VideoContext context) {
+        try {
+            String prompt = """
+                    你是 Video Agent。请根据用户提供的时序视频上下文完成分析。
+                    语音 transcript、画面 OCR 和 evidenceFrames 均按时间段对齐。
+                    每个结论必须引用上下文中的时间戳证据，不得编造视频中不存在的信息。
+
+                    只返回 JSON，不要 Markdown，不要代码块。结构必须为：
+                    {
+                      "title": "产物标题",
+                      "conclusions": ["结论"],
+                      "evidence": [
+                        {"timestampMs": 120000, "source": "ASR或OCR", "content": "证据内容"}
+                      ],
+                      "suggestions": ["建议"]
+                    }
+
+                    VideoContext:
+                    """ + objectMapper.writeValueAsString(context);
+
+            String json = chatModel.chat(prompt)
+                    .replace("```json", "")
+                    .replace("```", "")
+                    .trim();
+            return objectMapper.readValue(json, AnalysisResult.class);
+        } catch (Exception e) {
+            throw new IllegalStateException("结构化视频分析失败", e);
+        }
     }
 }
