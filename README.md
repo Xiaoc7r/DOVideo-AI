@@ -5,7 +5,7 @@
   <h1 align="center">DoVideoAI - 智能视频内容理解平台</h1>
   
   <p align="center">
-    <strong>全链路异步化 / 长任务稳定性保障 / AI 智能问答 </strong>
+    <strong> 稳定视频接入 / 多模态内容理解 / 目标驱动 Agent 分析 </strong>
   </p>
 
   <p align="center">
@@ -19,7 +19,7 @@
       <img src="https://img.shields.io/badge/Redisson-Lock-red" alt="Redisson">
     </a>
     <a href="https://github.com/Xiaoc7r/DOVideo-AI">
-      <img src="https://img.shields.io/badge/LangChain4j-AI-blueviolet" alt="LangChain4j">
+      <img src="https://img.shields.io/badge/LangChain4j-Agent-blueviolet" alt="LangChain4j">
     </a>
     <a href="https://github.com/Xiaoc7r/DOVideo-AI">
       <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License">
@@ -31,13 +31,16 @@
 
 <br/>
 
-**DoVideoAI** 是一个集成用户鉴权、视频上传、音频提取及 AI 自动总结的全链路视频内容理解平台。
+**DoVideoAI** 是一个面向长视频内容理解的 **Video Agent** 平台。
 
-针对视频处理场景中常见的 **“长耗时阻塞”** 、 **“高并发资源冲突”** 以及 **“大文件传输不稳定”** 等痛点，本项目抛弃了传统的同步处理模式，基于 **RocketMQ + Redisson + 分片续传** 重构了系统架构。
+**DoVideoAI** 集成了用户鉴权、分片上传、音频提取、文字转写、多模态解析及 AI 结构化产物生成。
 
-系统可以接入大模型api，自定义提示词，基于 Function Calling 可以实现查询信息和精准总结。
+针对视频处理场景中常见的 **长耗时阻塞、高并发资源冲突、大文件传输不稳定** 等痛点，基于 **RocketMQ + Redisson + 分片续传** 重构了系统架构。
 
-视频平台大多只解决了“存储”和“播放”的问题。DoVideoAI 旨在解决“理解”的问题。 它通过异步架构处理长耗时任务，利用 AI 提取核心价值，让视频不再是黑盒。
+针对视频的音像信息获取复杂，采取并行提取语音和视觉信息的方式，语音侧通过 ASR 生成带时间范围的转写文本，视觉侧通过关键帧 OCR 提取字幕、PPT 和代码等画面内容，再按时间轴构建统一的多模态 **VideoContext**。在此基础上，系统通过 **Planner-Executor-Critic** 受控 Agent 工作流理解用户目标、拆解任务、检索证据、生成结构化产物并校验结论。用户可以基于已经解析的视频内容继续追问，无需重新执行完整的视频预处理。
+
+视频平台大多只解决了**存储**和**播放**的问题，DoVideoAI 旨在解决“理解”的问题，利用 AI 提取核心价值，让视频不再是黑盒。
+
 
 <br/>
 
@@ -62,27 +65,107 @@
 
 ##  核心功能
 
-1. 🚀 稳定上传体验
+### 1. 🚀 稳定上传体验
 
-分片断点续传：针对 GB 级大文件（如 4K 课程录像），采用 Redis 维护上传分片状态。实测在 20% 丢包率弱网环境下，上传成功率从 25% 提升至 99%。
+**分片断点续传：** 针对 GB 级大文件，前端将视频切分为多个分片，通过 Redis 维护分片上传状态，网络中断后只需补传缺失部分。
 
-秒级响应：引入 RocketMQ 将耗时的“视频分析”动作剥离出主线程。用户上传完成后仅需 50ms 即可得到反馈，后续处理全异步化，彻底告别页面转圈卡死。
+**异步任务提交：** 引入 RocketMQ 将视频解析任务从请求线程中剥离。视频合并完成后，接口只负责创建任务并投递消息，后续处理全部交由消费者异步完成。
 
-2. 🛡️ 高并发防护
+### 2. 🛡️ 高并发防护
 
-分布式锁兜底：使用 Redisson + WatchDog 机制。当多个用户同时上传同一个热门公开课视频时，系统通过 MD5 内容指纹识别，利用分布式锁防止重复转码与 AI 分析，节省算力与 Token 开销。
+**内容级去重：** 使用视频 MD5 构建内容指纹，通过 Redisson 分布式锁控制相同视频的并发解析，避免重复任务争抢视频处理资源。
 
-削峰填谷：Controller 层集成 Redis 令牌桶算法，有效遏制恶意请求与突发流量，保护后端服务不被击穿。
+**消费幂等：** 按视频任务和用户分析目标记录完成状态，RocketMQ 重复投递时直接复用已有执行结果。
 
-3.  🔄 任务处理流程详解
+**削峰与重试：** Controller 层使用 Redis 令牌桶控制 AI 请求速率，第三方 ASR 和大模型接口异常时通过指数退避机制进行有限重试。
 
-稳健入口：文件直传 MinIO，避免应用服务器带宽瓶颈。
+### 3. 🎬 多模态 VideoContext
 
-异步解耦：上传成功后，Controller 仅发送一条消息至 RocketMQ 即刻返回，将长耗时任务留给后台。
+系统使用 FFmpeg 提取音频，并通过场景变化检测抽取关键帧。
 
-安全消费：消费者通过 Redisson 锁住视频 MD5，确保同一视频在同一时刻只有一个线程在处理。
+音频按照固定时间窗口切分后执行 ASR，生成带开始时间和结束时间的 transcript。关键帧经过 OCR 后记录画面文字、帧文件及对应时间戳。
 
-智能重试：针对第三方 AI API 可能的网络抖动，设计了指数退避重试机制，确保任务最终一致性。
+ASR 与关键帧 OCR 并行执行，最终按照时间窗口合并为统一的 `VideoSegment`：
+
+```text
+[02:00 - 02:30]
+
+ASR：接下来讲解二叉树的前序遍历
+OCR：前序遍历：根节点、左子树、右子树
+证据：frame_125000.jpg
+```
+
+多个 `VideoSegment` 共同组成多模态 `VideoContext`，供 Agent 检索、引用和校验。
+
+### 4. 🤖 受控 Agent 工作流
+
+系统采用 **Planner-Executor-Critic** 工作流：
+
+- **Planner：** 理解用户目标，并拆解为 3 到 5 个可执行任务。
+- **Executor：** 根据任务检索视频证据，生成结论、建议及时间戳引用。
+- **Critic：** 检查目标覆盖、证据一致性和结构完整性。
+- **定向重生成：** Critic 未通过时，将具体反馈交还 Executor 修正，最多执行两轮。
+
+相比单次 Prompt 总结，受控 AgentLoop 可以明确记录任务计划、中间产物、校验反馈和当前执行轮次。
+
+最终结果按照固定结构输出：
+
+```json
+{
+  "title": "视频分析标题",
+  "conclusions": ["主要结论"],
+  "evidence": [
+    {
+      "timestampMs": 120000,
+      "source": "ASR",
+      "content": "对应的视频证据"
+    }
+  ],
+  "suggestions": ["后续建议"]
+}
+```
+
+### 5. 🔍 长视频上下文压缩
+
+针对长视频，系统按照每 5 分钟构建一个语义块，并生成：
+
+- `segmentSummary`：片段摘要
+- `keywords`：片段关键词
+- `startTime/endTime`：时间范围
+- `rawSegments`：原始 ASR、OCR 和关键帧证据
+- `embedding`：片段语义向量
+
+Agent 默认只检索压缩后的摘要和关键词，通过 **关键词匹配 + Embedding 余弦相似度** 完成混合排序，再加载 TopK 相关片段的原始证据。
+
+该机制减少无关上下文对模型的干扰，也避免将完整长视频文本一次性发送给大模型。
+
+### 6. 💾 阶段级 Checkpoint
+
+长视频解析包含多个高耗时步骤，任意步骤失败后从头执行会造成大量重复计算。
+
+系统通过 Redis 保存以下阶段状态及中间产物：
+
+```text
+CONTEXT_COMPLETED
+PLAN_COMPLETED
+CRITIC_COMPLETED
+ANALYSIS_COMPLETED
+```
+
+任务恢复时优先读取最近成功阶段：
+
+- 已生成 VideoContext：跳过 ASR 和 OCR。
+- 已完成 Planner：复用任务规划。
+- 已产生 Critic 反馈：保留校验结果。
+- 已完成分析：直接返回结构化产物。
+
+Checkpoint 按“视频 ID + 用户目标”隔离，同一个视频可以根据不同提示词生成不同分析结果。
+
+### 7. 💬 基于视频内容继续追问
+
+视频首次解析完成后，系统保存多模态 VideoContext。
+
+用户继续追问时，只需将新问题作为 Agent 目标，复用已有 VideoContext，再次经过检索、Planner、Executor 和 Critic 工作流，无需重新执行视频上传、ASR 和 OCR。
 
 <br/>
 
@@ -92,43 +175,62 @@
 
 SpringBoot + RocketMQ + Redis + MySQL + MyBatis Plus + MinIO + FFmpeg + LangChain4j
 
+### AI
+
+ASR + OCR + DeepSeek + Embedding + Planner-Executor-Critic
+
 ### 部署
 
-Docker 
+Docker + Docker Compose
 
 ### 前端
 
 Vue 3 + Vite 
 
 <br/>
-不严谨流程图
+简易流程图
 
 ```mermaid
 graph TD
-    A[客户端发起请求] --> B{Redis令牌桶限流}
-    B -- 超过阈值 --> C[拒绝请求 保障可用性]
+    A[用户上传视频] --> B{Redis令牌桶限流}
+    B -- 超过限制 --> C[拒绝请求]
     B -- 获取令牌 --> D[分片并发上传]
-    D --> E(Redis记录分片状态断点续传)
-    E --> F[文件上传并合并完成]
-    
-    F --> G[封装元数据投递RocketMQ]
-    G --> H[上传接口立即返回 小于50ms]
+    D --> E[Redis记录分片状态]
+    E --> F[MinIO合并完整视频]
 
-    G --> I[消费者异步拉取消息]
-    I --> J{计算文件MD5查询去重}
-    J -- 命中记录 --> K[直接关联并返回历史结果]
-    J -- 全新视频 --> L[加Redisson分布式锁]
-    
-    L --> M(WatchDog机制防止长耗时锁过期)
-    M --> N[调用FFmpeg提取音频]
-    N --> O[请求硅基流动API生成字幕与总结]
-    O --> P(指数退避重试兜底网络抖动)
-    P --> Q[保存结果释放锁并清理资源]
+    F --> G[创建任务并投递RocketMQ]
+    G --> H[立即返回任务ID]
+    G --> I[消费者异步处理]
 
-    R[用户发起智能问答] --> S[Redis获取最近十轮对话]
-    S --> T[触发Function Calling机制]
-    T --> U[数据库检索相关视频信息]
-    U --> V[大模型结合上下文生成回复]
+    I --> J{MD5内容去重}
+    J -- 正在处理 --> K[跳过重复任务]
+    J -- 新任务 --> L[Redisson分布式锁]
+
+    L --> M{读取Checkpoint}
+    M -- 已有VideoContext --> R[复用VideoContext]
+    M -- 尚未构建 --> N[FFmpeg预处理]
+
+    N --> O1[ASR分段转写]
+    N --> O2[场景关键帧OCR]
+    O1 --> P[按时间轴融合]
+    O2 --> P
+    P --> Q[构建多模态VideoContext]
+    Q --> R
+
+    R --> S[每5分钟生成摘要和关键词]
+    S --> T[关键词和Embedding混合检索]
+    T --> U[加载TopK原始证据]
+
+    U --> V[Planner理解目标并拆解任务]
+    V --> W[Executor生成结构化产物]
+    W --> X[Critic校验目标和证据]
+
+    X -- 未通过且未超轮次 --> W
+    X -- 通过或达到轮次上限 --> Y[保存分析结果]
+    Y --> Z[Checkpoint标记完成]
+
+    AA[用户继续追问] --> AB[复用已有VideoContext]
+    AB --> T
 ```
 
 <br/>
@@ -162,7 +264,6 @@ graph TD
 
 ```bash
 # 在项目的根目录下，直接一键启动所有服务
-# (包含 MySQL, Redis, MinIO, RocketMQ, Dashboard)
 docker-compose up -d
 ```
 <img width="920" height="288" alt="一键部署" src="https://github.com/user-attachments/assets/592ce99a-18c8-4bec-96cc-f6d709f4aad1" />
@@ -178,13 +279,13 @@ spring.datasource.password=root
 ```
 
 #### 2. 配置AI模型密钥
-请填入你自己的 API Key(该项目默认使用了硅基流动的api)：
+请填入你自己的 API Key：
 ```properties
 # 不知道api是什么？可以前往 [https://cloud.siliconflow.cn/] 申请密钥，主要也有免费额度
 ai.deepseek.api-key=sk-你的密钥xxxxxxxxxxxxxxxx
 ```
 
-#### 3. 请确保本地已安装 FFmpeg 和 yt-dlp，并填入路径：
+#### 3. 配置 FFmpeg 和 yt-dlp，并填入路径：
 ```properties
 # Windows 环境示例 (注意使用斜杠 /)
 tool.ffmpeg.dir=D:/ffmpeg/bin
