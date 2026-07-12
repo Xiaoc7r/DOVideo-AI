@@ -1,61 +1,61 @@
 package com.example.server.consumer;
 
 import com.example.server.dto.AnalysisTaskMsg;
-import com.example.server.entity.MediaFile;
-import com.example.server.mapper.MediaFileMapper;
 import com.example.server.service.AiService;
+import com.example.server.utils.AnalysisTaskKeys;
 import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
-
-import java.nio.charset.StandardCharsets;
-import java.util.UUID;
-import java.util.concurrent.TimeUnit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Component
-//监听 "video-analysis-topic" 主题，组名随便起
-@RocketMQMessageListener(topic = "video-analysis-topic", consumerGroup = "video-group")
+@RocketMQMessageListener(
+        topic = "${rocketmq.topic.video-analysis:video-analysis-topic}",
+        consumerGroup = "${rocketmq.consumer.group:video-analysis-group}")
 public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> {
 
-    @Autowired
-    private AiService aiService;
+    private static final Logger log = LoggerFactory.getLogger(VideoAnalysisConsumer.class);
 
-    @Autowired
-    private MediaFileMapper mediaFileMapper;
+    private final AiService aiService;
+    private final RedissonClient redissonClient;
+    private final StringRedisTemplate redisTemplate;
 
-    @Autowired
-    private RedissonClient redissonClient;
-
-    @Autowired
-    private StringRedisTemplate redisTemplate;
+    public VideoAnalysisConsumer(AiService aiService,
+                                 RedissonClient redissonClient,
+                                 StringRedisTemplate redisTemplate) {
+        this.aiService = aiService;
+        this.redissonClient = redissonClient;
+        this.redisTemplate = redisTemplate;
+    }
 
     @Override
     public void onMessage(AnalysisTaskMsg msg) {
-        Long mediaId = msg.getMediaId();
-        String contentHash = msg.getContentHash();
-        if (contentHash == null || !contentHash.matches("([a-f0-9]{32}|media-\\d+)")) {
-            contentHash = "media-" + mediaId;
+        if (msg == null || msg.getMediaId() == null || msg.getUserGoal() == null
+                || msg.getUserGoal().isBlank()) {
+            throw new IllegalArgumentException("invalid video analysis message");
         }
-        String goalDigest = UUID.nameUUIDFromBytes(
-                String.valueOf(msg.getUserGoal()).trim().getBytes(StandardCharsets.UTF_8)).toString();
-        String lockKey = "lock:analysis:" + contentHash + ":" + goalDigest;
-        String activeKey = "analysis:active:" + contentHash + ":" + goalDigest;
-        String completedKey = "analysis:completed:" + mediaId + ":" + goalDigest;
+        Long mediaId = msg.getMediaId();
+        String contentHash = AnalysisTaskKeys.normalizeContentHash(mediaId, msg.getContentHash());
+        String goalDigest = AnalysisTaskKeys.goalDigest(msg.getUserGoal());
+        String lockKey = AnalysisTaskKeys.lock(contentHash, goalDigest);
+        String activeKey = AnalysisTaskKeys.active(contentHash, goalDigest);
+        String completedKey = AnalysisTaskKeys.completed(mediaId, goalDigest);
         RLock lock = redissonClient.getLock(lockKey);
         boolean acquired = false;
         try {
-            acquired = lock.tryLock(0, -1, TimeUnit.SECONDS);
+            acquired = lock.tryLock();
             if (!acquired || Boolean.TRUE.equals(redisTemplate.hasKey(completedKey))) {
+                log.info("video_analysis_skipped mediaId={} acquired={}", mediaId, acquired);
                 return;
             }
             aiService.asyncAnalyze(mediaId, msg.getUserGoal());
-            redisTemplate.opsForValue().set(completedKey, "1", 7, TimeUnit.DAYS);
+            redisTemplate.opsForValue().set(completedKey, "1", java.time.Duration.ofDays(7));
         } catch (Exception e) {
-            markAsFailed(mediaId, e.getMessage());
+            log.error("video_analysis_consume_failed mediaId={}", mediaId, e);
             throw new IllegalStateException("视频分析消费失败，交由 RocketMQ 重试", e);
         } finally {
             if (acquired) {
@@ -64,14 +64,6 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
                     lock.unlock();
                 }
             }
-        }
-    }
-
-    private void markAsFailed(Long id, String error) {
-        MediaFile file = mediaFileMapper.selectById(id);
-        if (file != null) {
-            file.setAiSummary("❌ 分析失败: " + error);
-            mediaFileMapper.updateById(file);
         }
     }
 }

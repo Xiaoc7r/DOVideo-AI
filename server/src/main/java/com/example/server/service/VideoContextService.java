@@ -4,17 +4,15 @@ import com.example.server.dto.VideoContext;
 import com.example.server.utils.AliyunAsrUtils;
 import com.example.server.utils.MinioUtils;
 import com.example.server.utils.OcrUtils;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import javax.imageio.ImageIO;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -26,61 +24,82 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 @Service
 public class VideoContextService {
 
+    private static final Logger log = LoggerFactory.getLogger(VideoContextService.class);
     private static final long SEGMENT_MS = 60_000L;
+    private static final long FALLBACK_FRAME_INTERVAL_MS = 30_000L;
     private static final Pattern PTS_TIME = Pattern.compile("pts_time:([0-9.]+)");
 
-    @Autowired
-    private AliyunAsrUtils aliyunAsrUtils;
+    private final AliyunAsrUtils aliyunAsrUtils;
+    private final OcrUtils ocrUtils;
+    private final MinioUtils minioUtils;
+    private final Executor asrExecutor;
+    private final Executor ocrExecutor;
+    private final AgentTelemetry telemetry;
 
-    @Autowired
-    private OcrUtils ocrUtils;
-
-    @Autowired
-    private MinioUtils minioUtils;
-
-    @Autowired
-    @Qualifier("asrExecutor")
-    private Executor asrExecutor;
-
-    @Autowired
-    @Qualifier("ocrExecutor")
-    private Executor ocrExecutor;
-
-    @Autowired
-    private AgentTelemetry telemetry;
+    public VideoContextService(AliyunAsrUtils aliyunAsrUtils,
+                               OcrUtils ocrUtils,
+                               MinioUtils minioUtils,
+                               @Qualifier("asrExecutor") Executor asrExecutor,
+                               @Qualifier("ocrExecutor") Executor ocrExecutor,
+                               AgentTelemetry telemetry) {
+        this.aliyunAsrUtils = aliyunAsrUtils;
+        this.ocrUtils = ocrUtils;
+        this.minioUtils = minioUtils;
+        this.asrExecutor = asrExecutor;
+        this.ocrExecutor = ocrExecutor;
+        this.telemetry = telemetry;
+    }
 
     public VideoContext build(String videoPath, String userGoal) {
         return build(videoPath, userGoal, null);
     }
 
     public VideoContext build(String videoPath, String userGoal, String traceId) {
+        String readableVideoPath = minioUtils.readableSource(videoPath);
         Path workDir = Path.of(System.getProperty("java.io.tmpdir"), "video-context-" + UUID.randomUUID());
         try {
             Files.createDirectories(workDir);
             CompletableFuture<BranchResult<TranscriptPart>> transcriptFuture = CompletableFuture.supplyAsync(() -> {
                 try {
-                    return BranchResult.success(transcribeBySegments(videoPath, workDir.resolve("audio"), traceId));
+                    return BranchResult.success(transcribeBySegments(readableVideoPath, workDir.resolve("audio"), traceId));
                 } catch (Exception e) {
                     return BranchResult.failure(e);
                 }
             }, asrExecutor);
             CompletableFuture<BranchResult<FramePart>> frameFuture = CompletableFuture.supplyAsync(() -> {
                 try {
-                    return BranchResult.success(extractKeyFrames(videoPath, workDir.resolve("frames"), traceId));
+                    return BranchResult.success(extractKeyFrames(readableVideoPath, workDir.resolve("frames"), traceId));
                 } catch (Exception e) {
                     return BranchResult.failure(e);
                 }
             }, ocrExecutor);
+            try {
+                CompletableFuture.allOf(transcriptFuture, frameFuture).get(60, TimeUnit.MINUTES);
+            } catch (TimeoutException e) {
+                transcriptFuture.cancel(true);
+                frameFuture.cancel(true);
+                throw new IllegalStateException("VideoContext 分支处理超过总时间预算", e);
+            } catch (InterruptedException e) {
+                transcriptFuture.cancel(true);
+                frameFuture.cancel(true);
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("VideoContext 构建被中断", e);
+            }
             BranchResult<TranscriptPart> transcriptResult = transcriptFuture.join();
             BranchResult<FramePart> frameResult = frameFuture.join();
             if (transcriptResult.failed() && frameResult.failed()) {
-                throw new IllegalStateException("ASR 和 OCR 分支均失败", transcriptResult.error());
+                IllegalStateException failure = new IllegalStateException(
+                        "ASR 和 OCR 分支均失败", transcriptResult.error());
+                failure.addSuppressed(frameResult.error());
+                throw failure;
             }
             if (transcriptResult.failed()) telemetry.increment(traceId, "asrBranchFailures", 1);
             if (frameResult.failed()) telemetry.increment(traceId, "ocrBranchFailures", 1);
@@ -110,12 +129,23 @@ public class VideoContextService {
         }
 
         List<TranscriptPart> result = new ArrayList<>();
+        int failedSegments = 0;
         for (int i = 0; i < audioFiles.size(); i++) {
-            telemetry.increment(traceId, "asrCalls", 1);
-            String text = aliyunAsrUtils.audioToText(audioFiles.get(i).toString());
-            if (text != null && !text.startsWith("❌")) {
-                result.add(new TranscriptPart(i * SEGMENT_MS, (i + 1) * SEGMENT_MS, text));
+            Path audioFile = audioFiles.get(i);
+            try {
+                telemetry.increment(traceId, "asrCalls", 1);
+                String text = aliyunAsrUtils.audioToText(audioFile.toString());
+                if (text != null && !text.isBlank()) {
+                    result.add(new TranscriptPart(i * SEGMENT_MS, (i + 1) * SEGMENT_MS, text));
+                }
+            } catch (RuntimeException e) {
+                failedSegments++;
+                telemetry.increment(traceId, "asrSegmentFailures", 1);
+                log.warn("asr_segment_failed segment={} file={}", i, audioFile.getFileName(), e);
             }
+        }
+        if (result.isEmpty() && failedSegments > 0) {
+            throw new IllegalStateException("所有 ASR 分片均处理失败");
         }
         return result;
     }
@@ -137,23 +167,38 @@ public class VideoContextService {
 
         List<FramePart> result = new ArrayList<>();
         Long previousHash = null;
+        int failedFrames = 0;
         for (int i = 0; i < frameFiles.size(); i++) {
             long imageHash = differenceHash(frameFiles.get(i).toFile());
             if (previousHash != null && Long.bitCount(previousHash ^ imageHash) <= 5) {
                 continue;
             }
             previousHash = imageHash;
-            long timestampMs = i < timestamps.size() ? timestamps.get(i) : i * SEGMENT_MS;
-            telemetry.increment(traceId, "ocrCalls", 1);
-            String ocrText = ocrUtils.recognize(frameFiles.get(i).toFile());
+            long timestampMs = i < timestamps.size() ? timestamps.get(i) : i * FALLBACK_FRAME_INTERVAL_MS;
+            String ocrText;
+            try {
+                telemetry.increment(traceId, "ocrCalls", 1);
+                ocrText = ocrUtils.recognize(frameFiles.get(i).toFile());
+            } catch (RuntimeException e) {
+                failedFrames++;
+                telemetry.increment(traceId, "ocrFrameFailures", 1);
+                log.warn("ocr_frame_failed frame={} timestampMs={}",
+                        frameFiles.get(i).getFileName(), timestampMs, e);
+                continue;
+            }
             String frameUrl;
             try {
                 frameUrl = minioUtils.uploadLocalFile(frameFiles.get(i).toFile());
             } catch (Exception e) {
                 telemetry.increment(traceId, "frameUploadFailures", 1);
+                log.warn("evidence_frame_upload_failed frame={} timestampMs={}",
+                        frameFiles.get(i).getFileName(), timestampMs, e);
                 frameUrl = videoPath + "#timestampMs=" + timestampMs;
             }
             result.add(new FramePart(timestampMs, ocrText, frameUrl));
+        }
+        if (result.isEmpty() && failedFrames > 0) {
+            throw new IllegalStateException("所有 OCR 关键帧均处理失败");
         }
         return result;
     }
@@ -184,8 +229,11 @@ public class VideoContextService {
         if (source == null) return 0;
         BufferedImage scaled = new BufferedImage(9, 8, BufferedImage.TYPE_BYTE_GRAY);
         Graphics2D graphics = scaled.createGraphics();
-        graphics.drawImage(source, 0, 0, 9, 8, null);
-        graphics.dispose();
+        try {
+            graphics.drawImage(source, 0, 0, 9, 8, null);
+        } finally {
+            graphics.dispose();
+        }
 
         long hash = 0;
         for (int y = 0; y < 8; y++) {
@@ -198,30 +246,52 @@ public class VideoContextService {
     }
 
     private void runCommand(List<String> command, List<Long> timestamps) throws Exception {
-        Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (timestamps != null && line.contains("showinfo")) {
-                    Matcher matcher = PTS_TIME.matcher(line);
-                    if (matcher.find()) {
-                        timestamps.add((long) (Double.parseDouble(matcher.group(1)) * 1000));
-                    }
+        Path logPath = Files.createTempFile("dovideo-ffmpeg-", ".log");
+        Process process = null;
+        try {
+            process = new ProcessBuilder(command)
+                    .redirectErrorStream(true)
+                    .redirectOutput(logPath.toFile())
+                    .start();
+            if (!process.waitFor(15, TimeUnit.MINUTES)) {
+                process.destroyForcibly();
+                throw new IllegalStateException("FFmpeg 执行超时");
+            }
+            if (process.exitValue() != 0) throw new IllegalStateException("FFmpeg 执行失败");
+            if (timestamps != null) {
+                try (Stream<String> lines = Files.lines(logPath)) {
+                    lines.forEach(line -> appendTimestamp(line, timestamps));
                 }
             }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw e;
+        } finally {
+            if (process != null && process.isAlive()) process.destroyForcibly();
+            Files.deleteIfExists(logPath);
         }
-        if (!process.waitFor(15, TimeUnit.MINUTES) || process.exitValue() != 0) {
-            process.destroyForcibly();
-            throw new IllegalStateException("FFmpeg 执行失败");
+    }
+
+    private void appendTimestamp(String line, List<Long> timestamps) {
+        if (!line.contains("showinfo")) return;
+        Matcher matcher = PTS_TIME.matcher(line);
+        if (matcher.find()) {
+            timestamps.add((long) (Double.parseDouble(matcher.group(1)) * 1000));
         }
     }
 
     private void deleteDirectory(Path directory) {
         if (!Files.exists(directory)) return;
         try (var paths = Files.walk(directory)) {
-            paths.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
-        } catch (Exception ignored) {
+            paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (Exception e) {
+                    log.warn("temporary_file_cleanup_failed path={}", path, e);
+                }
+            });
+        } catch (Exception e) {
+            log.warn("temporary_directory_cleanup_failed path={}", directory, e);
         }
     }
 

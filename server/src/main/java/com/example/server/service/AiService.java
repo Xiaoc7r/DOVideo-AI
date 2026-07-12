@@ -1,80 +1,87 @@
 package com.example.server.service;
 
-import com.example.server.dto.AgentState;
 import com.example.server.dto.AgentFeedback;
+import com.example.server.dto.AgentState;
+import com.example.server.dto.TaskStatus;
 import com.example.server.dto.VideoContext;
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
 import com.example.server.strategy.AiAnalysisStrategy;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+
+import java.time.Duration;
 
 @Service
 public class AiService {
 
-    @Autowired
-    private MediaFileMapper mediaFileMapper;
+    private static final Logger log = LoggerFactory.getLogger(AiService.class);
 
-    @Autowired
-    @Qualifier("defaultAiStrategy")
-    private AiAnalysisStrategy aiAnalysisStrategy;
+    private final MediaFileMapper mediaFileMapper;
+    private final AiAnalysisStrategy aiAnalysisStrategy;
+    private final VideoContextService videoContextService;
+    private final AgentLoopService agentLoopService;
+    private final AgentCheckpointService checkpointService;
+    private final AgentTelemetry telemetry;
+    private final MediaService mediaService;
+    private final StringRedisTemplate redisTemplate;
 
-    // 【关键】必须注入 Redis 工具！
-    @Autowired
-    private StringRedisTemplate redisTemplate;
-
-    @Autowired
-    private VideoContextService videoContextService;
-
-    @Autowired
-    private AgentLoopService agentLoopService;
-
-    @Autowired
-    private AgentCheckpointService checkpointService;
-
-    @Autowired
-    private AgentTelemetry telemetry;
+    public AiService(MediaFileMapper mediaFileMapper,
+                     @Qualifier("defaultAiStrategy") AiAnalysisStrategy aiAnalysisStrategy,
+                     VideoContextService videoContextService,
+                     AgentLoopService agentLoopService,
+                     AgentCheckpointService checkpointService,
+                     AgentTelemetry telemetry,
+                     MediaService mediaService,
+                     StringRedisTemplate redisTemplate) {
+        this.mediaFileMapper = mediaFileMapper;
+        this.aiAnalysisStrategy = aiAnalysisStrategy;
+        this.videoContextService = videoContextService;
+        this.agentLoopService = agentLoopService;
+        this.checkpointService = checkpointService;
+        this.telemetry = telemetry;
+        this.mediaService = mediaService;
+        this.redisTemplate = redisTemplate;
+    }
 
     public void asyncAnalyze(Long mediaId, String userGoal) {
         String traceId = telemetry.start(mediaId);
         telemetry.bind(traceId);
-        System.out.println(" [线程池] 开始处理任务，ID: " + mediaId);
-
         MediaFile mediaFile = mediaFileMapper.selectById(mediaId);
         if (mediaFile == null) {
             telemetry.clear();
-            return;
+            throw new IllegalArgumentException("media does not exist: " + mediaId);
         }
 
         try {
             AgentState agentState = checkpointService.loadResult(mediaId, userGoal);
-            if (agentState != null) {
-                mediaFile.setAiSummary(agentState.result().toMarkdown());
-                mediaFileMapper.updateById(mediaFile);
+            if (agentState != null && agentState.result() != null) {
+                persistResult(mediaFile, agentState);
+                telemetry.increment(traceId, "checkpointHits", 1);
                 return;
             }
 
-            // ASR + 场景关键帧 OCR 按时间轴合并为统一上下文
             VideoContext videoContext = checkpointService.loadContext(mediaId);
             if (videoContext == null) {
                 long contextStarted = System.nanoTime();
                 try {
                     videoContext = videoContextService.build(mediaFile.getFilePath(), userGoal, traceId);
+                    checkpointService.saveContext(mediaId, videoContext);
                     telemetry.stage(traceId, "VIDEO_CONTEXT", contextStarted, true);
                 } catch (RuntimeException e) {
                     telemetry.stage(traceId, "VIDEO_CONTEXT", contextStarted, false);
                     throw e;
                 }
-                checkpointService.saveContext(mediaId, videoContext);
             } else {
                 videoContext = new VideoContext(videoContext.source(), userGoal, videoContext.segments());
+                telemetry.increment(traceId, "contextCheckpointHits", 1);
             }
-            mediaFile.setTranscriptText(videoContext.transcriptText());
 
-            // Planner -> Executor -> Critic，最多两轮后强制结束
+            mediaFile.setTranscriptText(videoContext.transcriptText());
             long agentStarted = System.nanoTime();
             try {
                 agentState = agentLoopService.run(mediaId, videoContext);
@@ -83,37 +90,15 @@ public class AiService {
                 telemetry.stage(traceId, "AGENT_LOOP", agentStarted, false);
                 throw e;
             }
-            mediaFile.setAiSummary(agentState.result().toMarkdown());
-
-            // 3. 保存数据库 (这一步你已经成功了)
-            mediaFileMapper.updateById(mediaFile);
-
-
-            // 1. 拼装缓存 Key (必须和 MediaController 里的逻辑完全一致！)
-            // Controller 里是: "media:list:user:" + (userId == null ? "anon" : userId)
-            String userIdStr = (mediaFile.getUserId() == null) ? "anon" : String.valueOf(mediaFile.getUserId());
-            String cacheKey = "media:list:user:" + userIdStr;
-
-            // 2. 狠狠地删除
-            Boolean deleteResult = redisTemplate.delete(cacheKey);
-
-            // 3. 打印显眼日志 (请在黑窗口找这句话！！！)
-            if (Boolean.TRUE.equals(deleteResult)) {
-                System.out.println(" [线程池] 缓存清除成功！Key: " + cacheKey);
-            } else {
-                System.out.println("⚠️ [线程池] 缓存不存在或清除失败 (但这不影响新数据写入)，Key: " + cacheKey);
-            }
-
-            System.out.println("✅ [线程池] 任务全部完成，前端轮询将在下一次命中新数据。");
-
+            persistResult(mediaFile, agentState);
+            log.info("agent_analysis_completed traceId={} mediaId={} rounds={}",
+                    traceId, mediaId, agentState.round());
         } catch (Exception e) {
-            e.printStackTrace();
-            System.err.println("❌ [线程池] 任务失败: " + e.getMessage());
-
-            // 失败也要删缓存，否则前端会一直转圈看不到“失败”两个字
-            String userIdStr = (mediaFile.getUserId() == null) ? "anon" : String.valueOf(mediaFile.getUserId());
-            redisTemplate.delete("media:list:user:" + userIdStr);
+            mediaFile.setAiSummary("❌ 分析失败，请稍后重试");
+            mediaFileMapper.updateById(mediaFile);
+            mediaService.invalidateUserList(mediaFile.getUserId());
             checkpointService.saveFailure(mediaId, userGoal, "AI_ANALYSIS", e);
+            log.error("agent_analysis_failed traceId={} mediaId={}", traceId, mediaId, e);
             throw new IllegalStateException("AI analysis failed", e);
         } finally {
             telemetry.clear();
@@ -122,11 +107,16 @@ public class AiService {
 
     public String followUp(Long mediaId, String question) {
         VideoContext context = checkpointService.loadContext(mediaId);
-        if (context == null) {
-            throw new IllegalStateException("视频尚未完成 VideoContext 构建");
+        if (context == null) throw new IllegalStateException("视频尚未完成 VideoContext 构建");
+
+        String traceId = telemetry.start(mediaId);
+        telemetry.bind(traceId);
+        try {
+            VideoContext followUpContext = new VideoContext(context.source(), question, context.segments());
+            return agentLoopService.run(followUpContext).result().toMarkdown();
+        } finally {
+            telemetry.clear();
         }
-        VideoContext followUpContext = new VideoContext(context.source(), question, context.segments());
-        return agentLoopService.run(followUpContext).result().toMarkdown();
     }
 
     public String reviseAndRerun(AgentFeedback feedback) {
@@ -137,19 +127,21 @@ public class AiService {
         if (context == null) throw new IllegalStateException("视频尚未完成 VideoContext 构建");
 
         String goal = normalized.correctedGoal() == null || normalized.correctedGoal().isBlank()
-                ? normalized.goal() : normalized.correctedGoal();
-        AgentState.AgentPlan correctedPlan = normalized.correctedTasks().isEmpty() ? null
+                ? normalized.goal()
+                : normalized.correctedGoal().trim();
+        AgentState.AgentPlan correctedPlan = normalized.correctedTasks().isEmpty()
+                ? null
                 : new AgentState.AgentPlan(goal, normalized.correctedTasks());
         checkpointService.resetForRerun(normalized.mediaId(), goal, correctedPlan);
 
-        VideoContext revisedContext = new VideoContext(context.source(), goal, context.segments());
         String traceId = telemetry.start(normalized.mediaId());
         telemetry.bind(traceId);
         long started = System.nanoTime();
         try {
-            String result = agentLoopService.run(normalized.mediaId(), revisedContext).result().toMarkdown();
+            VideoContext revisedContext = new VideoContext(context.source(), goal, context.segments());
+            AgentState state = agentLoopService.run(normalized.mediaId(), revisedContext);
             telemetry.stage(traceId, "HUMAN_REVISE", started, true);
-            return result;
+            return state.result().toMarkdown();
         } catch (RuntimeException e) {
             telemetry.stage(traceId, "HUMAN_REVISE", started, false);
             throw e;
@@ -158,34 +150,96 @@ public class AiService {
         }
     }
 
-
-
-    //异步提取全文 (专门负责提取文字)
     @Async("aiTaskExecutor")
     public void asyncTranscribe(Long mediaId) {
-        System.out.println(" [线程池] 开始全文提取任务，ID: " + mediaId);
-
         MediaFile mediaFile = mediaFileMapper.selectById(mediaId);
-        if (mediaFile == null) return;
+        if (mediaFile == null) {
+            clearTranscriptionActive(mediaId);
+            return;
+        }
 
         try {
-            //只做语音转文字
-            String text = aiAnalysisStrategy.transcribe(mediaFile.getFilePath());
-            mediaFile.setTranscriptText(text);
-
-            //保存数据库
+            setTranscriptionState(mediaId, TaskStatus.State.PROCESSING, Duration.ofHours(2));
+            mediaFile.setTranscriptText(aiAnalysisStrategy.transcribe(
+                    mediaService.readableSource(mediaFile.getFilePath())));
             mediaFileMapper.updateById(mediaFile);
-
-            //强制删除 Redis 缓存
-            String userIdStr = (mediaFile.getUserId() == null) ? "anon" : String.valueOf(mediaFile.getUserId());
-            String cacheKey = "media:list:user:" + userIdStr;
-            redisTemplate.delete(cacheKey);
-
-            System.out.println(" [线程池] 全文提取完成，缓存已清除！Key: " + cacheKey);
-
+            mediaService.invalidateUserList(mediaFile.getUserId());
+            setTranscriptionState(mediaId, TaskStatus.State.COMPLETED, Duration.ofDays(7));
+            log.info("transcription_completed mediaId={}", mediaId);
         } catch (Exception e) {
-            e.printStackTrace();
-            System.err.println(" [线程池] 提取失败: " + e.getMessage());
+            setTranscriptionState(mediaId, TaskStatus.State.FAILED, Duration.ofHours(1));
+            log.error("transcription_failed mediaId={}", mediaId, e);
+        } finally {
+            clearTranscriptionActive(mediaId);
         }
+    }
+
+    public boolean queueTranscription(Long mediaId) {
+        Boolean accepted = redisTemplate.opsForValue().setIfAbsent(
+                transcriptionActiveKey(mediaId), "1", Duration.ofHours(2));
+        if (Boolean.TRUE.equals(accepted)) {
+            setTranscriptionState(mediaId, TaskStatus.State.QUEUED, Duration.ofHours(2));
+            return true;
+        }
+        return false;
+    }
+
+    public TaskStatus transcriptionStatus(MediaFile mediaFile) {
+        if (mediaFile.getTranscriptText() != null && !mediaFile.getTranscriptText().isBlank()) {
+            return TaskStatus.completed(mediaFile.getTranscriptText());
+        }
+        String stateValue = redisTemplate.opsForValue().get(transcriptionStateKey(mediaFile.getId()));
+        if (stateValue == null) {
+            boolean active = Boolean.TRUE.equals(redisTemplate.hasKey(
+                    transcriptionActiveKey(mediaFile.getId())));
+            return active
+                    ? TaskStatus.of(TaskStatus.State.PROCESSING, "正在提取文字")
+                    : TaskStatus.of(TaskStatus.State.NOT_STARTED, "尚未提交文字提取任务");
+        }
+        TaskStatus.State state;
+        try {
+            state = TaskStatus.State.valueOf(stateValue);
+        } catch (IllegalArgumentException e) {
+            log.warn("invalid_transcription_state mediaId={} state={}", mediaFile.getId(), stateValue);
+            return TaskStatus.of(TaskStatus.State.NOT_STARTED, "任务状态不可用");
+        }
+        return switch (state) {
+            case COMPLETED -> TaskStatus.completed(mediaFile.getTranscriptText());
+            case FAILED -> TaskStatus.of(state, "文字提取失败，请稍后重试");
+            case QUEUED -> TaskStatus.of(state, "文字提取任务已排队");
+            case PROCESSING -> TaskStatus.of(state, "正在提取文字");
+            case NOT_STARTED -> TaskStatus.of(state, "尚未提交文字提取任务");
+        };
+    }
+
+    private void setTranscriptionState(Long mediaId, TaskStatus.State state, Duration ttl) {
+        try {
+            redisTemplate.opsForValue().set(transcriptionStateKey(mediaId), state.name(), ttl);
+        } catch (RuntimeException e) {
+            log.warn("transcription_state_write_failed mediaId={} state={}", mediaId, state, e);
+        }
+    }
+
+    private void clearTranscriptionActive(Long mediaId) {
+        try {
+            redisTemplate.delete(transcriptionActiveKey(mediaId));
+        } catch (RuntimeException e) {
+            log.warn("transcription_active_cleanup_failed mediaId={}", mediaId, e);
+        }
+    }
+
+    private String transcriptionActiveKey(Long mediaId) {
+        return "transcription:active:" + mediaId;
+    }
+
+    private String transcriptionStateKey(Long mediaId) {
+        return "transcription:state:" + mediaId;
+    }
+
+    private void persistResult(MediaFile mediaFile, AgentState agentState) {
+        if (agentState.result() == null) throw new IllegalStateException("Agent 未生成分析结果");
+        mediaFile.setAiSummary(agentState.result().toMarkdown());
+        mediaFileMapper.updateById(mediaFile);
+        mediaService.invalidateUserList(mediaFile.getUserId());
     }
 }

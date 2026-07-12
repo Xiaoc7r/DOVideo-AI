@@ -1,101 +1,96 @@
 package com.example.server.utils;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.InputStreamReader;
+import java.net.InetAddress;
 import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 @Component
 public class YtDlpUtils {
 
-    @Value("${tool.ytdlp.path}")
-    private String ytDlpPath;
+    private static final Logger log = LoggerFactory.getLogger(YtDlpUtils.class);
 
-    @Value("${tool.ffmpeg.dir}")
-    private String ffmpegDir;
+    private final String ytDlpPath;
+    private final String ffmpegDir;
+
+    public YtDlpUtils(@Value("${tool.ytdlp.path}") String ytDlpPath,
+                      @Value("${tool.ffmpeg.dir}") String ffmpegDir) {
+        this.ytDlpPath = ytDlpPath;
+        this.ffmpegDir = ffmpegDir;
+    }
 
     public File downloadVideo(String url) throws Exception {
-        URI source = URI.create(url);
-        String scheme = source.getScheme();
-        String host = source.getHost();
-        if (host == null
-                || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
-                || "localhost".equalsIgnoreCase(host)
-                || "127.0.0.1".equals(host)
-                || "::1".equals(host)) {
-            throw new IllegalArgumentException("仅支持合法的公网 HTTP/HTTPS 视频链接");
-        }
-
-        String tempDir = System.getProperty("java.io.tmpdir");
-        String outputName = UUID.randomUUID().toString() + ".mp4";
-        String outputPath = tempDir + File.separator + outputName;
-
-        System.out.println("⬇️ [yt-dlp] 开始下载 (智能模式): " + url);
-
+        validatePublicHttpUrl(url);
+        Path outputPath = Path.of(System.getProperty("java.io.tmpdir"), UUID.randomUUID() + ".mp4");
+        Path logPath = Files.createTempFile("yt-dlp-", ".log");
         List<String> command = new ArrayList<>();
         command.add(ytDlpPath);
-
-
-        //删除所有 -f xxx 的限制，让 yt-dlp 自己选最佳兼容格式
-        //默认它会下载 bestvideo+bestaudio，如果遇到会员限制，它通常会自动降级或报错
-        //伪装头 (保留，防止直接被 ban)
-        command.add("--user-agent");
-        command.add("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
-        command.add("--referer");
-        command.add("https://www.bilibili.com/");
-
-        //强制转码 mp4 (这是唯一的硬性要求)
+        command.add("--no-playlist");
+        command.add("--socket-timeout");
+        command.add("30");
+        command.add("--retries");
+        command.add("3");
         command.add("--recode-video");
         command.add("mp4");
-
         if (ffmpegDir != null && !ffmpegDir.isBlank()) {
             command.add("--ffmpeg-location");
             command.add(ffmpegDir);
         }
-
         command.add("-o");
-        command.add(outputPath);
-
-        //只处理单个视频，避免误下载整个播放列表
-        command.add("--no-playlist");
-
+        command.add(outputPath.toString());
         command.add(url);
 
-        ProcessBuilder pb = new ProcessBuilder(command);
-        pb.redirectErrorStream(true);
+        Process process = null;
+        try {
+            process = new ProcessBuilder(command)
+                    .redirectErrorStream(true)
+                    .redirectOutput(logPath.toFile())
+                    .start();
+            if (!process.waitFor(30, TimeUnit.MINUTES)) {
+                process.destroyForcibly();
+                throw new IllegalStateException("视频链接下载超时");
+            }
+            if (process.exitValue() != 0 || !Files.isRegularFile(outputPath)) {
+                String logs = Files.readString(logPath);
+                throw new IllegalStateException("yt-dlp 下载失败: " + tail(logs, 2_000));
+            }
+            log.info("url_video_downloaded host={} bytes={}", URI.create(url).getHost(), Files.size(outputPath));
+            return outputPath.toFile();
+        } catch (Exception e) {
+            Files.deleteIfExists(outputPath);
+            throw e;
+        } finally {
+            Files.deleteIfExists(logPath);
+            if (process != null && process.isAlive()) process.destroyForcibly();
+        }
+    }
 
-        Process process = pb.start();
-
-        StringBuilder logs = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                //打印yt-dlp的关键日志，方便调试
-                if (line.contains("ERROR") || line.contains("Downloading") || line.contains("[Merger]")) {
-                    System.out.println("cmd > " + line);
-                }
-                logs.append(line).append("\n");
+    private void validatePublicHttpUrl(String value) throws Exception {
+        URI uri = URI.create(value);
+        String scheme = uri.getScheme();
+        String host = uri.getHost();
+        if (host == null || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))) {
+            throw new IllegalArgumentException("仅支持合法的公网 HTTP/HTTPS 视频链接");
+        }
+        for (InetAddress address : InetAddress.getAllByName(host)) {
+            if (address.isAnyLocalAddress() || address.isLoopbackAddress()
+                    || address.isLinkLocalAddress() || address.isSiteLocalAddress()) {
+                throw new IllegalArgumentException("不允许访问本机或内网地址");
             }
         }
+    }
 
-        int exitCode = process.waitFor();
-        if (exitCode != 0) {
-            //如果还是失败抛出异常，前端会显示红色报错
-            throw new RuntimeException("yt-dlp 下载失败: " + logs.toString());
-        }
-
-        File downloadedFile = new File(outputPath);
-        if (!downloadedFile.exists()) {
-            throw new RuntimeException("下载显示成功但文件未生成");
-        }
-
-        System.out.println("✅ [yt-dlp] 下载完成: " + (downloadedFile.length() / 1024) + "KB");
-        return downloadedFile;
+    private String tail(String value, int maxLength) {
+        return value.length() <= maxLength ? value : value.substring(value.length() - maxLength);
     }
 }

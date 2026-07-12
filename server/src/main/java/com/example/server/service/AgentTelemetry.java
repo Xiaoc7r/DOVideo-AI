@@ -52,7 +52,8 @@ public class AgentTelemetry {
         TraceData trace = traces.get(traceId);
         if (trace == null) return;
         long durationMs = (System.nanoTime() - startedNanos) / 1_000_000;
-        trace.stageDurations.put(stage, durationMs);
+        trace.stageDurations.merge(stage, durationMs, Long::sum);
+        trace.increment(stage + "Calls", 1);
         if (!success) trace.increment("failedStages", 1);
         log.info("agent_trace traceId={} taskId={} stage={} durationMs={} status={}",
                 traceId, trace.taskId, stage, durationMs, success ? "SUCCESS" : "FAILED");
@@ -108,7 +109,10 @@ public class AgentTelemetry {
     }
 
     private long estimateTokens(String text) {
-        return text == null ? 0 : Math.max(1, (text.length() + 3L) / 4L);
+        if (text == null || text.isEmpty()) return 0;
+        long nonAscii = text.codePoints().filter(codePoint -> codePoint > 127).count();
+        long ascii = text.codePoints().count() - nonAscii;
+        return Math.max(1, nonAscii + (ascii + 3) / 4);
     }
 
     private static class TraceData {

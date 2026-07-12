@@ -18,21 +18,25 @@ import java.util.concurrent.TimeUnit;
 @Component
 public class EmbeddingUtils {
 
-    @Value("${ai.deepseek.api-key}")
-    private String apiKey;
-
-    @Value("${ai.deepseek.base-url}")
-    private String baseUrl;
-
-    @Value("${ai.embedding.model:BAAI/bge-m3}")
-    private String model;
+    private final String apiKey;
+    private final String baseUrl;
+    private final String model;
 
     private final OkHttpClient client = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
             .build();
 
+    public EmbeddingUtils(@Value("${ai.deepseek.api-key}") String apiKey,
+                          @Value("${ai.deepseek.base-url}") String baseUrl,
+                          @Value("${ai.embedding.model:BAAI/bge-m3}") String model) {
+        this.apiKey = apiKey;
+        this.baseUrl = baseUrl.replaceAll("/+$", "");
+        this.model = model;
+    }
+
     public List<Double> embed(String text) {
+        if (text == null || text.isBlank()) return List.of();
         try {
             JSONObject requestJson = new JSONObject();
             requestJson.put("model", model);
@@ -52,9 +56,10 @@ public class EmbeddingUtils {
                     throw new IllegalStateException("Embedding API failed: " + response.code());
                 }
                 JSONObject json = JSON.parseObject(response.body().string());
-                JSONArray values = json.getJSONArray("data")
-                        .getJSONObject(0)
-                        .getJSONArray("embedding");
+                JSONArray data = json.getJSONArray("data");
+                if (data == null || data.isEmpty()) throw new IllegalStateException("Embedding data is empty");
+                JSONArray values = data.getJSONObject(0).getJSONArray("embedding");
+                if (values == null || values.isEmpty()) throw new IllegalStateException("Embedding vector is empty");
                 List<Double> embedding = new ArrayList<>(values.size());
                 for (Object value : values) {
                     embedding.add(((Number) value).doubleValue());

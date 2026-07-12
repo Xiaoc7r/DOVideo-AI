@@ -13,9 +13,21 @@ public record VideoChunk(
         List<VideoContext.VideoSegment> rawSegments,
         List<Double> embedding
 ) {
+    public VideoChunk {
+        if (startTime < 0 || endTime <= startTime) throw new IllegalArgumentException("invalid chunk range");
+        segmentSummary = segmentSummary == null ? "" : segmentSummary.trim();
+        keywords = keywords == null ? List.of() : List.copyOf(keywords);
+        rawSegments = rawSegments == null ? List.of() : List.copyOf(rawSegments);
+        embedding = embedding == null ? List.of() : List.copyOf(embedding);
+    }
+
     public record ChunkSummary(
             String segmentSummary,
             List<String> keywords
     ) {
+        public ChunkSummary {
+            segmentSummary = segmentSummary == null ? "" : segmentSummary.trim();
+            keywords = keywords == null ? List.of() : List.copyOf(keywords);
+        }
     }
 }

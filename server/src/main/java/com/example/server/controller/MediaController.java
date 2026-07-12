@@ -1,250 +1,153 @@
 package com.example.server.controller;
 
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.example.server.entity.MediaFile;
-import com.example.server.mapper.MediaFileMapper;
+import com.example.server.dto.MediaSummary;
+import com.example.server.service.AuthService;
 import com.example.server.service.MediaService;
 import com.example.server.utils.MinioUtils;
-import com.example.server.utils.YtDlpUtils; //确保导入这个
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.redis.core.StringRedisTemplate;
+import com.example.server.utils.YtDlpUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestAttribute;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
-import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 
 @RestController
 @RequestMapping("/media")
 public class MediaController {
 
-    @Autowired(required = false)
-    private MediaFileMapper mediaFileMapper;
+    private static final Logger log = LoggerFactory.getLogger(MediaController.class);
 
-    @Autowired
-    private StringRedisTemplate redisTemplate;
+    private final MinioUtils minioUtils;
+    private final YtDlpUtils ytDlpUtils;
+    private final MediaService mediaService;
 
-    @Autowired
-    private ObjectMapper objectMapper;
-
-    @Autowired
-    private MinioUtils minioUtils;
-
-    @Autowired
-    private YtDlpUtils ytDlpUtils;
-
-    @Autowired
-    private MediaService mediaService;
+    public MediaController(MinioUtils minioUtils, YtDlpUtils ytDlpUtils, MediaService mediaService) {
+        this.minioUtils = minioUtils;
+        this.ytDlpUtils = ytDlpUtils;
+        this.mediaService = mediaService;
+    }
 
     @PostMapping("/init-upload")
     public ResponseEntity<String> initUpload(@RequestParam String filename,
                                              @RequestParam int totalChunks,
-                                             @RequestParam(value = "userId", required = false) Long userId) {
+                                             @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
         try {
             return ResponseEntity.ok(mediaService.initChunkedUpload(filename, totalChunks, userId));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.status(500).body("Failed to initialize upload");
+            log.error("chunk_upload_init_failed userId={}", userId, e);
+            return ResponseEntity.internalServerError().body("Failed to initialize upload");
         }
     }
 
     @GetMapping("/upload-status")
-    public ResponseEntity<?> uploadStatus(@RequestParam String uploadId) {
-        try {
-            Set<Integer> uploadedChunks = mediaService.getUploadedChunks(uploadId);
-            return ResponseEntity.ok(uploadedChunks);
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
-        }
+    public ResponseEntity<Set<Integer>> uploadStatus(
+            @RequestParam String uploadId,
+            @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
+        return ResponseEntity.ok(mediaService.getUploadedChunks(uploadId, userId));
     }
 
     @PostMapping("/upload-chunk")
     public ResponseEntity<String> uploadChunk(@RequestParam String uploadId,
                                               @RequestParam int chunkIndex,
                                               @RequestParam int totalChunks,
-                                              @RequestParam("file") MultipartFile file) {
+                                              @RequestParam("file") MultipartFile file,
+                                              @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
         try {
-            mediaService.uploadChunk(uploadId, chunkIndex, totalChunks, file);
+            mediaService.uploadChunk(uploadId, chunkIndex, totalChunks, file, userId);
             return ResponseEntity.ok("Chunk uploaded");
+        } catch (SecurityException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.status(500).body("Chunk upload failed");
+            log.error("chunk_upload_failed uploadId={} chunkIndex={}", uploadId, chunkIndex, e);
+            return ResponseEntity.internalServerError().body("Chunk upload failed");
         }
     }
 
     @PostMapping("/complete-upload")
-    public ResponseEntity<String> completeUpload(@RequestParam String uploadId) {
+    public ResponseEntity<String> completeUpload(
+            @RequestParam String uploadId,
+            @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
         try {
-            mediaService.completeChunkedUpload(uploadId);
+            mediaService.completeChunkedUpload(uploadId, userId);
             return ResponseEntity.ok("Upload success");
+        } catch (SecurityException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
         } catch (IllegalArgumentException | IllegalStateException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.status(500).body("Upload merge failed");
+            log.error("chunk_merge_failed uploadId={}", uploadId, e);
+            return ResponseEntity.internalServerError().body("Upload merge failed");
         }
     }
 
-
     @PostMapping("/upload")
     public ResponseEntity<String> upload(@RequestParam("file") MultipartFile file,
-                                         @RequestParam(value = "userId", required = false) Long userId) {
+                                         @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
         if (file == null || file.isEmpty()) {
             return ResponseEntity.badRequest().body("Upload failed: file is empty");
         }
-        if (mediaFileMapper == null) {
-            return ResponseEntity.status(500).body("Upload failed: database not ready");
-        }
         try {
             String md5 = mediaService.calculateMd5(file);
-            System.out.println("Uploading to MinIO...");
             String fileUrl = minioUtils.uploadFile(file);
-            System.out.println("MinIO upload success, url: " + fileUrl);
-
-            MediaFile mediaFile = new MediaFile();
-            mediaFile.setFilename(file.getOriginalFilename());
-            mediaFile.setFilePath(fileUrl);
-            mediaFile.setStatus("COMPLETED");
-            mediaFile.setUploadTime(LocalDateTime.now());
-
-            if (userId != null) {
-                mediaFile.setUserId(userId);
-            }
-
-            mediaFileMapper.insert(mediaFile);
-            mediaService.rememberContentHash(mediaFile.getId(), md5);
-
-            if (userId != null) {
-                String cacheKey = "media:list:user:" + userId;
-                redisTemplate.delete(cacheKey);
-                System.out.println("Cache cleared: " + cacheKey);
-            }
-
+            mediaService.saveUploadedMedia(file.getOriginalFilename(), fileUrl, userId, md5);
             return ResponseEntity.ok("Upload success");
-
         } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.status(500).body("Upload failed: " + e.getMessage());
+            log.error("media_upload_failed userId={} filename={}", userId, file.getOriginalFilename(), e);
+            return ResponseEntity.internalServerError().body("Upload failed");
         }
     }
 
     @PostMapping("/upload-url")
-    public org.springframework.http.ResponseEntity<String> uploadUrl(@RequestParam("url") String url,
-                                                                     @RequestParam(value = "userId", required = false) Long userId) {
+    public ResponseEntity<String> uploadUrl(@RequestParam("url") String url,
+                                            @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
+        if (url == null || url.isBlank()) {
+            return ResponseEntity.badRequest().body("Upload failed: url is empty");
+        }
+
         File tempFile = null;
         try {
-            if (url == null || url.isBlank()) {
-                return org.springframework.http.ResponseEntity.badRequest().body("Upload failed: url is empty");
-            }
-            if (mediaFileMapper == null) {
-                return org.springframework.http.ResponseEntity.status(500).body("Upload failed: database not ready");
-            }
-            System.out.println("Received upload url: " + url);
-
             tempFile = ytDlpUtils.downloadVideo(url);
-
             String md5 = mediaService.calculateMd5(tempFile);
             String fileUrl = minioUtils.uploadLocalFile(tempFile);
-
-            MediaFile mediaFile = new MediaFile();
-            mediaFile.setFilename("WEB_" + tempFile.getName());
-            mediaFile.setFilePath(fileUrl);
-            mediaFile.setStatus("COMPLETED");
-            mediaFile.setUploadTime(LocalDateTime.now());
-
-            if (userId != null) {
-                mediaFile.setUserId(userId);
-            }
-
-            mediaFileMapper.insert(mediaFile);
-            mediaService.rememberContentHash(mediaFile.getId(), md5);
-
-            if (userId != null) {
-                String cacheKey = "media:list:user:" + userId;
-                redisTemplate.delete(cacheKey);
-                System.out.println("Cache cleared: " + cacheKey);
-            }
-
-            return org.springframework.http.ResponseEntity.ok("Upload success");
-
+            mediaService.saveUploadedMedia("WEB_" + tempFile.getName(), fileUrl, userId, md5);
+            return ResponseEntity.ok("Upload success");
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
-            e.printStackTrace();
-            return org.springframework.http.ResponseEntity.status(500).body("Upload failed: " + e.getMessage());
+            log.error("url_upload_failed userId={}", userId, e);
+            return ResponseEntity.internalServerError().body("Upload failed");
         } finally {
-            if (tempFile != null && tempFile.exists()) {
-                tempFile.delete();
+            if (tempFile != null && tempFile.exists() && !tempFile.delete()) {
+                log.warn("temporary_video_cleanup_failed path={}", tempFile.getAbsolutePath());
             }
         }
     }
 
     @GetMapping("/list")
-    public List<MediaFile> getList(@RequestParam(value = "userId", required = false) Long userId) {
-        String cacheKey = "media:list:user:" + (userId == null ? "anon" : userId);
-
-        try {
-            String json = redisTemplate.opsForValue().get(cacheKey);
-            if (json != null) {
-                System.out.println("命中 Redis 缓存，直接返回！");
-                return objectMapper.readValue(json, new TypeReference<List<MediaFile>>(){});
-            }
-        } catch (Exception e) {
-            System.err.println("Redis 读取失败: " + e.getMessage());
-        }
-
-        QueryWrapper<MediaFile> query = new QueryWrapper<>();
-        if (userId != null) {
-            query.eq("user_id", userId);
-        } else {
-            return List.of();
-        }
-        List<MediaFile> list = mediaFileMapper.selectList(query.orderByDesc("id"));
-
-        try {
-            String jsonToWrite = objectMapper.writeValueAsString(list);
-            redisTemplate.opsForValue().set(cacheKey, jsonToWrite, 30, TimeUnit.MINUTES);
-            System.out.println("已写入 Redis 缓存");
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-
-        return list;
+    public List<MediaSummary> getList(@RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
+        return mediaService.listByUser(userId).stream().map(MediaSummary::from).toList();
     }
 
-    //删除接口
     @DeleteMapping("/delete")
-    public String delete(@RequestParam("id") Long id,
-                         @RequestParam(value = "userId", required = false) Long userId) {
-
-        MediaFile media = mediaFileMapper.selectById(id);
-        if (media == null) return "文件不存在";
-
-        if (userId != null && !Objects.equals(media.getUserId(), userId)) {
-            return "无权删除他人的文件";
-        }
-
-        if (media.getFilePath() != null && media.getFilePath().startsWith("http")) {
-            minioUtils.removeFile(media.getFilePath());
-        }
-
-        mediaFileMapper.deleteById(id);
-
-        if (media.getUserId() != null) {
-            String cacheKey = "media:list:user:" + media.getUserId();
-            redisTemplate.delete(cacheKey);
-            System.out.println("缓存已清除: " + cacheKey);
-        }
-
-        return "删除成功";
+    public ResponseEntity<String> delete(@RequestParam("id") Long id,
+                                         @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
+        mediaService.deleteOwnedMedia(id, userId);
+        return ResponseEntity.ok("删除成功");
     }
 }

@@ -173,15 +173,17 @@ public class DeepSeekUtils {
     }
 
     private <T> T parseJson(String response, Class<T> type) throws Exception {
+        if (response == null || response.isBlank()) {
+            throw new IllegalStateException("模型返回空响应");
+        }
         String json = response
                 .replace("```json", "")
                 .replace("```", "")
                 .trim();
         int start = json.indexOf('{');
         int end = json.lastIndexOf('}');
-        if (start >= 0 && end > start) {
-            json = json.substring(start, end + 1);
-        }
+        if (start < 0 || end <= start) throw new IllegalStateException("模型未返回 JSON 对象");
+        json = json.substring(start, end + 1);
         return objectMapper.readValue(json, type);
     }
 
@@ -189,6 +191,7 @@ public class DeepSeekUtils {
         long started = System.nanoTime();
         try {
             String response = chatModel.chat(prompt);
+            if (response == null || response.isBlank()) throw new IllegalStateException("模型返回空响应");
             telemetry.modelCall(stage, prompt, response,
                     inputPricePerMillion, outputPricePerMillion, started);
             return response;

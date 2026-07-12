@@ -18,12 +18,12 @@ public record AgentFeedback(
     public AgentFeedback normalized() {
         return new AgentFeedback(
                 mediaId,
-                goal,
+                goal == null ? null : goal.trim(),
                 rating,
-                errorType,
-                comment,
-                correctedGoal,
-                correctedTasks == null ? List.of() : correctedTasks,
+                errorType == null ? null : errorType.trim(),
+                comment == null ? null : comment.trim(),
+                correctedGoal == null ? null : correctedGoal.trim(),
+                correctedTasks == null ? List.of() : List.copyOf(correctedTasks),
                 evidenceTimestamp,
                 evidenceAccepted,
                 createdAt == null ? Instant.now() : createdAt

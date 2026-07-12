@@ -282,43 +282,13 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { marked } from 'marked'
+import { apiRequest, clearAuthToken, hasAuthToken, setAuthToken } from './api'
+import { DEMO_EVALUATION, DEMO_ITEM, DEMO_PLAN, DEMO_RESULT, DEMO_TRACE } from './demoData'
 
 // --- 变量定义 ---
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:9090'
 const DEMO_MODE = new URLSearchParams(window.location.search).has('demo')
 const DEFAULT_GOAL = '理解视频核心内容，提炼关键结论，并给出带时间戳的证据和可执行建议'
 const goalPresets = ['生成学习笔记', '提炼会议结论', '梳理操作步骤']
-const apiUrl = (path) => `${API_BASE}${path}`
-const DEMO_ITEM = {
-  id: 1001,
-  filename: '数据结构课程 · 二叉树遍历.mp4',
-  status: 'COMPLETED',
-  uploadTime: '2026-07-10T14:30:00',
-  transcriptText: '本节课介绍二叉树前序、中序和后序遍历，并对比递归与迭代实现。'
-}
-const DEMO_PLAN = {
-  understoodGoal: DEFAULT_GOAL,
-  tasks: ['定位视频章节与核心主题', '融合 ASR 与关键帧 OCR 证据', '提炼结论并进行 Critic 校验']
-}
-const DEMO_TRACE = {
-  stageDurationMs: { VIDEO_CONTEXT: 12840, RETRIEVAL: 860, PLANNER: 1150, EXECUTOR: 3420, CRITIC: 1260 }
-}
-const DEMO_EVALUATION = { structuredValid: true, evidenceSupportRate: 0.92, criticPassed: true }
-const DEMO_RESULT = `## 二叉树遍历课程分析
-
-## 核心结论
-- 前序遍历遵循“根节点、左子树、右子树”，适合构建树结构副本。
-- 中序遍历二叉搜索树时可得到有序序列。
-- 递归实现更直观，迭代实现通过栈显式保存访问状态。
-
-## 视频证据
-- [02:05] ASR：老师开始讲解前序遍历的访问顺序。
-- [02:08] OCR：课件显示“根节点 → 左子树 → 右子树”。
-- [08:42] ASR + OCR：对比递归调用栈与显式栈实现。
-
-## 学习建议
-- 用同一棵树手动推演三种遍历顺序。
-- 分别实现递归版与迭代版，重点理解栈中保存的状态。`
 const file = ref(null)
 const videoUrl = ref('')
 const message = ref('')
@@ -350,21 +320,48 @@ const authError = ref(false)
 const authForm = ref({ username: '', password: '', nickname: '' })
 const pollingTimers = ref({})
 const traceStages = computed(() => Object.entries(sidebar.value.trace?.stageDurationMs || {}))
+const MARKDOWN_TAGS = new Set([
+  'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'P', 'BR', 'HR', 'BLOCKQUOTE',
+  'UL', 'OL', 'LI', 'STRONG', 'EM', 'DEL', 'CODE', 'PRE', 'A',
+  'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD'
+])
 
-// Markdown 解析
+const stopPolling = (id) => {
+  const polling = pollingTimers.value[id]
+  if (!polling) return
+  clearInterval(polling.timer)
+  clearTimeout(polling.timeout)
+  delete pollingTimers.value[id]
+}
+
+const stopAllPolling = () => {
+  Object.keys(pollingTimers.value).forEach(stopPolling)
+}
+
 const renderedMarkdown = computed(() => {
   if (!sidebar.value.content) return ''
-  let cleanText = sidebar.value.content.replace(/<think>[\s\S]*?<\/think>/gi, "")
-  if (cleanText.includes("</think>")) cleanText = cleanText.split("</think>").pop()
+  let cleanText = sidebar.value.content.replace(/<think>[\s\S]*?<\/think>/gi, '')
+  if (cleanText.includes('</think>')) cleanText = cleanText.split('</think>').pop()
   if (!cleanText.trim()) cleanText = sidebar.value.content
   const template = document.createElement('template')
   template.innerHTML = marked.parse(cleanText)
-  template.content.querySelectorAll('script, iframe, object, embed, style').forEach(node => node.remove())
   template.content.querySelectorAll('*').forEach(node => {
+    if (!MARKDOWN_TAGS.has(node.tagName)) {
+      node.replaceWith(document.createTextNode(node.textContent || ''))
+      return
+    }
     for (const attribute of [...node.attributes]) {
-      if (attribute.name.startsWith('on') || /^(javascript|data):/i.test(attribute.value)) {
+      const isAllowedLinkAttribute = node.tagName === 'A'
+        && (attribute.name === 'href' || attribute.name === 'title')
+      if (!isAllowedLinkAttribute) {
         node.removeAttribute(attribute.name)
       }
+    }
+    if (node.tagName === 'A') {
+      const href = node.getAttribute('href') || ''
+      if (!/^(https?:|mailto:|\/|#)/i.test(href)) node.removeAttribute('href')
+      node.setAttribute('rel', 'noopener noreferrer')
+      node.setAttribute('target', '_blank')
     }
   })
   return template.innerHTML
@@ -429,7 +426,7 @@ const uploadFile = async () => {
     let uploadedChunks = new Set()
 
     if (uploadId) {
-      const statusRes = await fetch(apiUrl(`/media/upload-status?uploadId=${encodeURIComponent(uploadId)}`))
+      const statusRes = await apiRequest(`/media/upload-status?uploadId=${encodeURIComponent(uploadId)}`)
       if (statusRes.ok) {
         uploadedChunks = new Set(await statusRes.json())
       } else {
@@ -441,10 +438,9 @@ const uploadFile = async () => {
     if (!uploadId) {
       const params = new URLSearchParams({
         filename: selectedFile.name,
-        totalChunks: String(totalChunks),
-        userId: String(currentUser.value.id)
+        totalChunks: String(totalChunks)
       })
-      const initRes = await fetch(apiUrl(`/media/init-upload?${params}`), { method: 'POST' })
+      const initRes = await apiRequest(`/media/init-upload?${params}`, { method: 'POST' })
       const initText = await initRes.text()
       if (!initRes.ok) throw new Error(initText || 'Failed to initialize upload')
       uploadId = initText
@@ -459,17 +455,17 @@ const uploadFile = async () => {
     const uploadNext = async () => {
       while (cursor < pendingChunks.length) {
         const index = pendingChunks[cursor++]
-      const formData = new FormData()
-      formData.append('uploadId', uploadId)
-      formData.append('chunkIndex', String(index))
-      formData.append('totalChunks', String(totalChunks))
-      formData.append('file', selectedFile.slice(index * CHUNK_SIZE, Math.min(selectedFile.size, (index + 1) * CHUNK_SIZE)))
+        const formData = new FormData()
+        formData.append('uploadId', uploadId)
+        formData.append('chunkIndex', String(index))
+        formData.append('totalChunks', String(totalChunks))
+        formData.append('file', selectedFile.slice(index * CHUNK_SIZE, Math.min(selectedFile.size, (index + 1) * CHUNK_SIZE)))
 
-      const chunkRes = await fetch(apiUrl('/media/upload-chunk'), {
-        method: 'POST',
-        body: formData
-      })
-      if (!chunkRes.ok) throw new Error(await chunkRes.text() || `Chunk ${index} failed`)
+        const chunkRes = await apiRequest('/media/upload-chunk', {
+          method: 'POST',
+          body: formData
+        })
+        if (!chunkRes.ok) throw new Error(await chunkRes.text() || `Chunk ${index} failed`)
         completedChunks++
         message.value = `正在上传分片 ${completedChunks}/${totalChunks}...`
       }
@@ -480,7 +476,7 @@ const uploadFile = async () => {
 
     message.value = '分片上传完成，正在合并文件...'
     const completeParams = new URLSearchParams({ uploadId })
-    const completeRes = await fetch(apiUrl(`/media/complete-upload?${completeParams}`), { method: 'POST' })
+    const completeRes = await apiRequest(`/media/complete-upload?${completeParams}`, { method: 'POST' })
     if (!completeRes.ok) throw new Error(await completeRes.text() || 'Upload merge failed')
 
     localStorage.removeItem(storageKey)
@@ -525,10 +521,9 @@ const handleUrlUpload = async () => {
 
   const formData = new FormData()
   formData.append('url', videoUrl.value)
-  if (currentUser.value) formData.append('userId', currentUser.value.id)
 
   try {
-    const res = await fetch(apiUrl('/media/upload-url'), {
+    const res = await apiRequest('/media/upload-url', {
       method: 'POST',
       body: formData
     })
@@ -558,13 +553,12 @@ const showMsg = (msg, isError = false) => {
 const fetchList = async () => {
   if (DEMO_MODE) return
   try {
-    let url = apiUrl('/media/list')
+    let url = '/media/list'
     if (currentUser.value) {
-      // 【核心修改】加一个 _t 时间戳，强制浏览器每次都发新请求，不许读缓存！
       const timestamp = new Date().getTime()
-      url += `?userId=${currentUser.value.id}&_t=${timestamp}`
+      url += `?_t=${timestamp}`
 
-      const res = await fetch(url)
+      const res = await apiRequest(url)
       if (!res.ok) throw new Error('加载视频列表失败')
       const data = await res.json()
       list.value = data
@@ -584,9 +578,7 @@ const deleteItem = async (item) => {
   }
   if (!confirm(`确认要永久删除 "${item.filename}" 吗？`)) return
   try {
-    let url = apiUrl(`/media/delete?id=${item.id}`)
-    if (currentUser.value) url += `&userId=${currentUser.value.id}`
-    const res = await fetch(url, { method: 'DELETE' })
+    const res = await apiRequest(`/media/delete?id=${item.id}`, { method: 'DELETE' })
     const text = await res.text()
     if (text === '删除成功') {
       showMsg('文件已销毁')
@@ -610,12 +602,11 @@ const downloadAudio = async (item) => {
     showMsg(`演示模式：${item.filename} 音频已准备`)
     return
   }
-  const url = apiUrl(`/debug/download?id=${item.id}`)
   let fileName = item.filename || 'audio.mp3';
   fileName = fileName.replace(/\.[^/.]+$/, "") + ".mp3";
   try {
     showMsg('正在转码并下载...')
-    const res = await fetch(url)
+    const res = await apiRequest(`/analysis/download?id=${item.id}`)
     if(!res.ok) throw new Error("Fail")
     const blob = await res.blob()
     const downloadUrl = window.URL.createObjectURL(blob)
@@ -640,23 +631,32 @@ const transcribe = async (id) => {
     sidebar.value.loading = false
     return
   }
-  if (item && item.transcriptText) {
-    openSidebar('text', '全量文字提取')
-    sidebar.value.content = item.transcriptText
-    sidebar.value.loading = false
-    return
-  }
   if (pollingTimers.value[id] && pollingTimers.value[id].type === 'text') {
     openSidebar('text', '全量文字提取')
+    sidebar.value.mediaId = id
     sidebar.value.loading = true
     sidebar.value.content = "📝 文字提取正在后台进行中..."
     return
   }
   openSidebar('text', '全量文字提取')
+  sidebar.value.mediaId = id
   sidebar.value.loading = true
   sidebar.value.content = "📝 提取任务已提交，正在识别语音流..."
   try {
-    await fetch(apiUrl(`/debug/transcribe?id=${id}`))
+    const current = await apiRequest(`/analysis/transcription-status?id=${id}`)
+    if (!current.ok) throw new Error(await current.text())
+    const currentStatus = await current.json()
+    if (currentStatus.state === 'COMPLETED') {
+      sidebar.value.content = currentStatus.result || ''
+      sidebar.value.loading = false
+      return
+    }
+    if (currentStatus.state === 'QUEUED' || currentStatus.state === 'PROCESSING') {
+      startPolling(id, 'text')
+      return
+    }
+    const response = await apiRequest(`/analysis/transcribe?id=${id}`, { method: 'POST' })
+    if (!response.ok) throw new Error(await response.text())
     startPolling(id, 'text')
   } catch (e) {
     sidebar.value.content = "Error: " + e
@@ -664,7 +664,6 @@ const transcribe = async (id) => {
   }
 }
 
-// === 【核心修改】AI 分析函数，增加限流/锁错误的处理 ===
 const aiAnalyze = async (id, goal) => {
   if (pollingTimers.value[id] && pollingTimers.value[id].type === 'ai') {
     sidebar.value.mode = 'result'
@@ -678,10 +677,9 @@ const aiAnalyze = async (id, goal) => {
 
   try {
     const params = new URLSearchParams({ id: String(id), goal })
-    const res = await fetch(apiUrl(`/debug/ai?${params}`))
+    const res = await apiRequest(`/analysis/ai?${params}`, { method: 'POST' })
     const text = await res.text()
-
-    if (text.includes("⚠️") || text.includes("❌")) {
+    if (!res.ok) {
       showMsg(text, true)
       sidebar.value.loading = false
       sidebar.value.content = text
@@ -698,74 +696,69 @@ const aiAnalyze = async (id, goal) => {
 }
 
 const startPolling = (id, type, goal = '') => {
-  // 清理旧定时器
-  if (pollingTimers.value[id]) clearInterval(pollingTimers.value[id].timer)
-  console.log(`[轮询] 开始监听任务 ID: ${id}, 类型: ${type}`)
+  stopPolling(id)
+  const polling = { timer: null, timeout: null, type, inFlight: false, metaTick: 0 }
 
-  const timer = setInterval(async () => {
-    // 1. 强制刷新列表 (带时间戳防止缓存)
-    await fetchList()
-    const item = list.value.find(i => i.id === id)
-    if (!item) return
-
-    let isFinished = false
-    let result = ''
-
-    if (type === 'ai') {
-      if (sidebar.value.mediaId === id) refreshAgentMeta(id, goal, false)
-      const text = item.aiSummary || ''
-
-      // 【核心修改】纯文本判断逻辑，绝对不使用 Emoji
-      // 条件1: 成功 (包含 Markdown 的标题特征 "##")
-      const isSuccess = text.includes("##");
-      // 条件2: 失败 (包含错误关键词)
-      const isError = text.includes("失败") || text.includes("Error") || text.includes("超时") || text.includes("500");
-
-      // 只要是成功或失败，都视为“结束”，停止轮询
-      if (isSuccess || isError) {
-        isFinished = true
-        result = text
-      }
-
-    } else if (type === 'text') {
-      const text = item.transcriptText || ''
-      // 文字提取同理：如果有内容且长度足够，或者报错，就停止
-      if (text && (text.length > 10 || text.includes("失败"))) {
-        isFinished = true
-        result = text
-      }
+  const finish = async (result, failed = false) => {
+    if (sidebar.value.visible && sidebar.value.type === type && sidebar.value.mediaId === id) {
+      sidebar.value.content = result
+      sidebar.value.loading = false
+      if (type === 'ai' && !failed) await refreshAgentMeta(id, goal, true)
     }
+    showMsg(failed ? '任务执行失败，请稍后重试' : '任务完成', failed)
+    stopPolling(id)
+  }
 
-    // 2. 结算
-    if (isFinished) {
-      // 如果侧边栏正开着，更新内容
-      if (sidebar.value.visible && sidebar.value.type === type) {
-        sidebar.value.content = result
-        sidebar.value.loading = false
-        if (type === 'ai') refreshAgentMeta(id, goal, true)
+  const poll = async () => {
+    if (polling.inFlight || pollingTimers.value[id] !== polling) return
+    polling.inFlight = true
+    try {
+      if (type === 'ai') {
+        const params = new URLSearchParams({ id: String(id), goal })
+        const response = await apiRequest(`/analysis/analysis-status?${params}`)
+        if (!response.ok) throw new Error(await response.text())
+        const status = await response.json()
+        if (status.state === 'COMPLETED') {
+          await fetchList()
+          await finish(status.result || '分析完成')
+          return
+        }
+        if (status.state === 'FAILED') {
+          await finish(status.message || '分析失败', true)
+          return
+        }
+        polling.metaTick += 1
+        if (sidebar.value.mediaId === id && polling.metaTick % 4 === 0) {
+          await refreshAgentMeta(id, goal, false)
+        }
+        return
       }
 
-      // 只有成功才提示完成，报错则提示警告
-      if (result.includes("失败") || result.includes("Error")) {
-        showMsg("⚠️ 任务结束，但存在错误", true)
-      } else {
-        showMsg("✅ 任务完成")
+      const response = await apiRequest(`/analysis/transcription-status?id=${id}`)
+      if (!response.ok) throw new Error(await response.text())
+      const status = await response.json()
+      if (status.state === 'FAILED') {
+        await finish(status.message || '文字提取失败', true)
+      } else if (status.state === 'COMPLETED') {
+        await finish(status.result || '')
       }
-
-      clearInterval(timer)
-      delete pollingTimers.value[id]
+    } catch (error) {
+      console.error('task polling failed', error)
+    } finally {
+      polling.inFlight = false
     }
-  }, 3000) // 3秒轮询一次
+  }
 
-  pollingTimers.value[id] = { timer, type }
-
-  // 5分钟强制兜底停止
-  setTimeout(() => {
-    if (pollingTimers.value[id]) {
-      clearInterval(pollingTimers.value[id].timer)
-      delete pollingTimers.value[id]
+  polling.timer = setInterval(poll, 3000)
+  polling.timeout = setTimeout(() => {
+    if (pollingTimers.value[id] === polling) {
+      stopPolling(id)
+      showMsg('任务仍在后台执行，可稍后重新打开查看', true)
+      if (sidebar.value.mediaId === id) sidebar.value.loading = false
     }
   }, 300000)
+  pollingTimers.value[id] = polling
+  poll()
 }
 
 const openSidebar = (type, title) => {
@@ -823,10 +816,10 @@ const refreshAgentMeta = async (id, goal, includeEvaluation) => {
   const params = new URLSearchParams({ id: String(id), goal })
   try {
     const requests = [
-      fetch(apiUrl(`/debug/agent-plan?${params}`)),
-      fetch(apiUrl(`/debug/agent-trace?id=${id}`))
+      apiRequest(`/analysis/agent-plan?${params}`),
+      apiRequest(`/analysis/agent-trace?id=${id}`)
     ]
-    if (includeEvaluation) requests.push(fetch(apiUrl(`/debug/agent-evaluation?${params}`)))
+    if (includeEvaluation) requests.push(apiRequest(`/analysis/agent-evaluation?${params}`))
     const responses = await Promise.all(requests)
     if (sidebar.value.mediaId !== id) return
     const planText = responses[0].ok ? await responses[0].text() : ''
@@ -853,7 +846,7 @@ const submitFollowUp = async () => {
   sidebar.value.followUpLoading = true
   try {
     const params = new URLSearchParams({ id: String(sidebar.value.mediaId), question })
-    const res = await fetch(apiUrl(`/debug/follow-up?${params}`))
+    const res = await apiRequest(`/analysis/follow-up?${params}`, { method: 'POST' })
     const answer = await res.text()
     if (!res.ok) throw new Error(answer || '追问失败')
     sidebar.value.content += `\n\n## 追问\n${question}\n\n${answer}`
@@ -872,7 +865,7 @@ const sendFeedback = async (rating) => {
     return
   }
   try {
-    const res = await fetch(apiUrl('/debug/agent-feedback'), {
+    const res = await apiRequest('/analysis/agent-feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mediaId: sidebar.value.mediaId, goal: sidebar.value.goal, rating })
@@ -907,7 +900,7 @@ const handleAuth = async () => {
   authMessage.value = ''
   const endpoint = authMode.value === 'login' ? '/user/login' : '/user/register'
   try {
-    const res = await fetch(apiUrl(endpoint), {
+    const res = await apiRequest(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(authForm.value)
@@ -917,6 +910,7 @@ const handleAuth = async () => {
       if (authMode.value === 'login') {
         currentUser.value = data.userInfo
         localStorage.setItem('user', JSON.stringify(data.userInfo))
+        setAuthToken(data.token)
         closeAuthModal()
         showMsg(`欢迎回来，${data.userInfo.nickname}`)
         fetchList()
@@ -938,14 +932,29 @@ const handleAuth = async () => {
   }
 }
 const logout = () => {
-  Object.values(pollingTimers.value).forEach(item => clearInterval(item.timer))
-  pollingTimers.value = {}
+  if (hasAuthToken()) {
+    apiRequest('/user/logout', { method: 'POST' }).catch(() => {})
+  }
+  stopAllPolling()
   currentUser.value = null
   localStorage.removeItem('user')
+  clearAuthToken()
   list.value = []
   showMsg('已退出系统')
 }
+
+const handleAuthExpired = () => {
+  stopAllPolling()
+  currentUser.value = null
+  list.value = []
+  sidebar.value.visible = false
+  localStorage.removeItem('user')
+  showMsg('登录状态已失效，请重新登录', true)
+  openAuthModal()
+}
+
 onMounted(() => {
+  window.addEventListener('auth-expired', handleAuthExpired)
   if (DEMO_MODE) {
     currentUser.value = { id: 1, nickname: 'Agent Demo' }
     list.value = [DEMO_ITEM]
@@ -954,7 +963,7 @@ onMounted(() => {
     return
   }
   const savedUser = localStorage.getItem('user')
-  if (savedUser) {
+  if (savedUser && hasAuthToken()) {
     try {
       currentUser.value = JSON.parse(savedUser)
     } catch(e) {}
@@ -962,7 +971,8 @@ onMounted(() => {
   fetchList()
 })
 onUnmounted(() => {
-  Object.values(pollingTimers.value).forEach(item => clearInterval(item.timer))
+  window.removeEventListener('auth-expired', handleAuthExpired)
+  stopAllPolling()
 })
 </script>
 

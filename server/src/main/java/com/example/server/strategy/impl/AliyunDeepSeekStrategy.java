@@ -2,109 +2,70 @@ package com.example.server.strategy.impl;
 
 import com.example.server.strategy.AiAnalysisStrategy;
 import com.example.server.utils.AliyunAsrUtils;
-import com.example.server.utils.DeepSeekUtils;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
 
 @Component("defaultAiStrategy")
 public class AliyunDeepSeekStrategy implements AiAnalysisStrategy {
 
-    @Autowired
-    private AliyunAsrUtils aliyunAsrUtils;
+    private static final Logger log = LoggerFactory.getLogger(AliyunDeepSeekStrategy.class);
 
-    @Autowired
-    private DeepSeekUtils deepSeekUtils;
+    private final AliyunAsrUtils aliyunAsrUtils;
+
+    public AliyunDeepSeekStrategy(AliyunAsrUtils aliyunAsrUtils) {
+        this.aliyunAsrUtils = aliyunAsrUtils;
+    }
 
     @Override
     public String transcribe(String videoPath) {
         return processVideoToText(videoPath);
     }
 
-    @Override
-    public String generateSummary(String videoPath) {
-        String text = processVideoToText(videoPath);
-        if (text.startsWith("❌")) return text;
-
-        return deepSeekUtils.analyzeContent("请对以下视频提取的文字进行总结，不需要废话，直接列出核心观点：\n" + text);
-    }
-
-
     private String processVideoToText(String inputPath) {
-        //简单检查
-        if (inputPath == null || inputPath.isEmpty()) return "❌ 路径为空";
-
-        //如果是本地路径且不存在，报错；如果是 http 链接，跳过检查直接交给 FFmpeg
-        if (!inputPath.startsWith("http")) {
-            File localFile = new File(inputPath);
-            if (!localFile.exists()) return "❌ 磁盘找不到文件: " + inputPath;
+        if (inputPath == null || inputPath.isBlank()) throw new IllegalArgumentException("视频路径为空");
+        if (!inputPath.startsWith("http") && !Files.isRegularFile(Path.of(inputPath))) {
+            throw new IllegalArgumentException("视频文件不存在");
         }
 
-        //准备临时 MP3 路径 (放在系统临时目录下)
-        String outputMp3Path = System.getProperty("java.io.tmpdir") + File.separator + "temp_" + UUID.randomUUID() + ".mp3";
-
+        Path audioPath = null;
         try {
-            System.out.println("🎵 [AI策略] 正在处理视频源: " + inputPath);
-
-            // 3. 提取音频 (FFmpeg 原生支持 HTTP URL，这里直接传进去)
-            boolean success = extractAudio(inputPath, outputMp3Path);
-            if (!success) return "FFmpeg 转换失败 (可能是网络超时或文件损坏)";
-
-            // 4. 语音转文字
-            String text = aliyunAsrUtils.audioToText(outputMp3Path);
-            return text;
-
+            audioPath = Files.createTempFile("dovideo-transcribe-", ".mp3");
+            extractAudio(inputPath, audioPath);
+            return aliyunAsrUtils.audioToText(audioPath.toString());
         } catch (Exception e) {
-            e.printStackTrace();
-            return "处理异常: " + e.getMessage();
+            throw new IllegalStateException("视频转写失败", e);
         } finally {
-            // 5. 清理临时文件
-            File mp3 = new File(outputMp3Path);
-            if (mp3.exists()) mp3.delete();
+            if (audioPath != null) {
+                try {
+                    Files.deleteIfExists(audioPath);
+                } catch (Exception cleanupError) {
+                    log.warn("temporary_audio_cleanup_failed path={}", audioPath, cleanupError);
+                }
+            }
         }
     }
 
-    // === FFmpeg 工具 ===
-    private boolean extractAudio(String inputPath, String outputPath) {
-        Process process = null;
+    private void extractAudio(String inputPath, Path outputPath) throws Exception {
+        Process process = new ProcessBuilder(
+                "ffmpeg", "-y", "-i", inputPath,
+                "-vn", "-acodec", "libmp3lame", "-q:a", "2", outputPath.toString())
+                .redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .start();
         try {
-            List<String> command = new ArrayList<>();
-            command.add("ffmpeg");
-            command.add("-y");
-            command.add("-i");
-            command.add(inputPath);
-            command.add("-vn");
-            command.add("-acodec");
-            command.add("libmp3lame");
-            command.add("-q:a");
-            command.add("2");
-            command.add(outputPath);
-
-            ProcessBuilder pb = new ProcessBuilder(command);
-            pb.redirectErrorStream(true);
-            pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
-
-            process = pb.start();
-            //网络流可能比较慢，给多点时间
-            boolean finished = process.waitFor(15, java.util.concurrent.TimeUnit.MINUTES);
-
-            if (finished) {
-                return process.exitValue() == 0;
-            } else {
+            if (!process.waitFor(15, TimeUnit.MINUTES)) {
                 process.destroyForcibly();
-                return false;
+                throw new IllegalStateException("FFmpeg execution timed out");
             }
-        } catch (Exception e) {
-            e.printStackTrace();
-            return false;
+            if (process.exitValue() != 0) throw new IllegalStateException("FFmpeg conversion failed");
         } finally {
-            if (process != null && process.isAlive()) {
-                process.destroyForcibly();
-            }
+            if (process.isAlive()) process.destroyForcibly();
         }
     }
 }
