@@ -37,6 +37,7 @@ public class MediaService {
     private final ObjectMapper objectMapper;
     private final AgentCheckpointService checkpointService;
     private final AgentTelemetry telemetry;
+    private final QdrantVectorStore vectorStore;
 
     private static final String MEDIA_MD5_KEY_PREFIX = "media:md5:";
     private static final Set<String> VIDEO_SUFFIXES = Set.of(
@@ -47,13 +48,15 @@ public class MediaService {
                         MinioUtils minioUtils,
                         ObjectMapper objectMapper,
                         AgentCheckpointService checkpointService,
-                        AgentTelemetry telemetry) {
+                        AgentTelemetry telemetry,
+                        QdrantVectorStore vectorStore) {
         this.mediaFileMapper = mediaFileMapper;
         this.redisTemplate = redisTemplate;
         this.minioUtils = minioUtils;
         this.objectMapper = objectMapper;
         this.checkpointService = checkpointService;
         this.telemetry = telemetry;
+        this.vectorStore = vectorStore;
     }
 
     public String calculateMd5(MultipartFile file) throws IOException {
@@ -137,6 +140,7 @@ public class MediaService {
                     "transcription:state:" + mediaId));
             checkpointService.deleteMedia(mediaId);
             telemetry.deleteTask(mediaId);
+            vectorStore.deleteMedia(mediaId);
         } catch (RuntimeException e) {
             log.warn("media_runtime_cleanup_failed mediaId={}", mediaId, e);
         }

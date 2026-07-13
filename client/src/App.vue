@@ -301,7 +301,7 @@ import { apiRequest, clearAuthToken, hasAuthToken, setAuthToken } from './api'
 import { uploadVideoInChunks } from './chunkUpload'
 import { DEMO_EVALUATION, DEMO_ITEM, DEMO_PLAN, DEMO_RESULT, DEMO_TRACE } from './demoData'
 import { renderMarkdown } from './markdown'
-import { createTaskPolling } from './taskPolling'
+import { createTaskStreams } from './taskEvents'
 
 // --- 变量定义 ---
 const DEMO_MODE = new URLSearchParams(window.location.search).has('demo')
@@ -340,7 +340,7 @@ const authLoading = ref(false)
 const authMessage = ref('')
 const authError = ref(false)
 const authForm = ref({ username: '', password: '', nickname: '' })
-const taskPolling = createTaskPolling()
+const taskStreams = createTaskStreams()
 const traceStages = computed(() => Object.entries(sidebar.value.trace?.stageDurationMs || {}))
 
 const renderedMarkdown = computed(() => renderMarkdown(sidebar.value.content))
@@ -555,7 +555,7 @@ const transcribe = async (id) => {
     sidebar.value.loading = false
     return
   }
-  if (taskPolling.has(id, 'text')) {
+  if (taskStreams.has(id, 'text')) {
     openSidebar('text', '全量文字提取')
     sidebar.value.mediaId = id
     sidebar.value.loading = true
@@ -576,12 +576,12 @@ const transcribe = async (id) => {
       return
     }
     if (currentStatus.state === 'QUEUED' || currentStatus.state === 'PROCESSING') {
-      startPolling(id, 'text')
+      startTaskStream(id, 'text')
       return
     }
     const response = await apiRequest(`/analysis/transcribe?id=${id}`, { method: 'POST' })
     if (!response.ok) throw new Error(await response.text())
-    startPolling(id, 'text')
+    startTaskStream(id, 'text')
   } catch (e) {
     sidebar.value.content = "Error: " + e
     sidebar.value.loading = false
@@ -589,7 +589,7 @@ const transcribe = async (id) => {
 }
 
 const aiAnalyze = async (id, goal) => {
-  if (taskPolling.has(id, 'ai')) {
+  if (taskStreams.has(id, 'ai')) {
     sidebar.value.mode = 'result'
     sidebar.value.loading = true
     return
@@ -610,7 +610,7 @@ const aiAnalyze = async (id, goal) => {
       return
     }
 
-    startPolling(id, 'ai', goal)
+    startTaskStream(id, 'ai', goal)
     refreshAgentMeta(id, goal, false)
 
   } catch (e) {
@@ -619,9 +619,7 @@ const aiAnalyze = async (id, goal) => {
   }
 }
 
-const startPolling = (id, type, goal = '') => {
-  let metaTick = 0
-
+const startTaskStream = (id, type, goal = '') => {
   const finish = async (result, failed = false) => {
     if (sidebar.value.visible && sidebar.value.type === type && sidebar.value.mediaId === id) {
       sidebar.value.content = result
@@ -629,48 +627,32 @@ const startPolling = (id, type, goal = '') => {
       if (type === 'ai' && !failed) await refreshAgentMeta(id, goal, true)
     }
     showMsg(failed ? '任务执行失败，请稍后重试' : '任务完成', failed)
-    taskPolling.stop(id, type)
+    taskStreams.stop(id, type)
   }
 
-  const poll = async () => {
-    try {
-      if (type === 'ai') {
-        const params = new URLSearchParams({ id: String(id), goal })
-        const response = await apiRequest(`/analysis/analysis-status?${params}`)
-        if (!response.ok) throw new Error(await response.text())
-        const status = await response.json()
-        if (status.state === 'COMPLETED') {
-          await fetchList()
-          await finish(status.result || '分析完成')
-          return
-        }
-        if (status.state === 'FAILED') {
-          await finish(status.message || '分析失败', true)
-          return
-        }
-        metaTick += 1
-        if (sidebar.value.mediaId === id && metaTick % 4 === 0) {
-          await refreshAgentMeta(id, goal, false)
-        }
-        return
-      }
+  const params = new URLSearchParams({ id: String(id) })
+  if (type === 'ai') params.set('goal', goal)
+  const path = type === 'ai'
+    ? `/analysis/analysis-events?${params}`
+    : `/analysis/transcription-events?${params}`
 
-      const response = await apiRequest(`/analysis/transcription-status?id=${id}`)
-      if (!response.ok) throw new Error(await response.text())
-      const status = await response.json()
-      if (status.state === 'FAILED') {
-        await finish(status.message || '文字提取失败', true)
-      } else if (status.state === 'COMPLETED') {
-        await finish(status.result || '')
-      }
-    } catch (error) {
-      console.error('task polling failed', error)
+  taskStreams.start(id, type, path, async status => {
+    if (sidebar.value.mediaId === id && sidebar.value.type === type && status.message) {
+      sidebar.value.content = status.state === 'PROCESSING' || status.state === 'QUEUED'
+        ? status.message
+        : sidebar.value.content
     }
-  }
-
-  taskPolling.start(id, type, poll, () => {
-    showMsg('任务仍在后台执行，可稍后重新打开查看', true)
-    if (sidebar.value.mediaId === id) sidebar.value.loading = false
+    if (type === 'ai' && status.stage && sidebar.value.mediaId === id) {
+      await refreshAgentMeta(id, goal, false)
+    }
+    if (status.state === 'COMPLETED') {
+      await fetchList()
+      await finish(status.result || (type === 'ai' ? '分析完成' : ''))
+    } else if (status.state === 'FAILED') {
+      await finish(status.message || '任务执行失败', true)
+    }
+  }, error => {
+    console.warn('task event stream reconnecting', error)
   })
 }
 
@@ -802,7 +784,7 @@ const rerunWithPlan = async () => {
     sidebar.value.planDraft = []
     sidebar.value.content = ''
     sidebar.value.loading = true
-    startPolling(sidebar.value.mediaId, 'ai', sidebar.value.goal)
+    startTaskStream(sidebar.value.mediaId, 'ai', sidebar.value.goal)
   } catch (error) {
     showMsg(error.message || '重新提交失败', true)
   } finally {
@@ -910,7 +892,7 @@ const logout = () => {
   if (hasAuthToken()) {
     apiRequest('/user/logout', { method: 'POST' }).catch(() => {})
   }
-  taskPolling.stopAll()
+  taskStreams.stopAll()
   currentUser.value = null
   localStorage.removeItem('user')
   clearAuthToken()
@@ -919,7 +901,7 @@ const logout = () => {
 }
 
 const handleAuthExpired = () => {
-  taskPolling.stopAll()
+  taskStreams.stopAll()
   currentUser.value = null
   list.value = []
   sidebar.value.visible = false
@@ -947,7 +929,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('auth-expired', handleAuthExpired)
-  taskPolling.stopAll()
+  taskStreams.stopAll()
 })
 </script>
 

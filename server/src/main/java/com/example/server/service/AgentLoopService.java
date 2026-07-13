@@ -2,6 +2,7 @@ package com.example.server.service;
 
 import com.example.server.dto.AgentState;
 import com.example.server.dto.AnalysisResult;
+import com.example.server.dto.TaskStatus;
 import com.example.server.dto.VideoContext;
 import com.example.server.utils.DeepSeekUtils;
 import org.springframework.stereotype.Service;
@@ -19,17 +20,20 @@ public class AgentLoopService {
     private final AgentCheckpointService checkpointService;
     private final AgentTelemetry telemetry;
     private final EvidenceVerificationService evidenceVerificationService;
+    private final TaskEventService taskEventService;
 
     public AgentLoopService(DeepSeekUtils deepSeekUtils,
                             LongVideoContextService longVideoContextService,
                             AgentCheckpointService checkpointService,
                             AgentTelemetry telemetry,
-                            EvidenceVerificationService evidenceVerificationService) {
+                            EvidenceVerificationService evidenceVerificationService,
+                            TaskEventService taskEventService) {
         this.deepSeekUtils = deepSeekUtils;
         this.longVideoContextService = longVideoContextService;
         this.checkpointService = checkpointService;
         this.telemetry = telemetry;
         this.evidenceVerificationService = evidenceVerificationService;
+        this.taskEventService = taskEventService;
     }
 
     public AgentState run(VideoContext context) {
@@ -50,6 +54,11 @@ public class AgentLoopService {
             if (mediaId != null) checkpointService.savePlan(mediaId, relevantContext.userGoal(), plan);
         }
         validatePlan(plan);
+        if (mediaId != null) {
+            taskEventService.publishAnalysis(mediaId, relevantContext.userGoal(),
+                    TaskStatus.of(TaskStatus.State.PROCESSING, "Planner 已完成任务拆解"),
+                    "PLAN_COMPLETED");
+        }
         AgentState state = savedState == null
                 ? new AgentState(relevantContext.userGoal(), plan, null, null, 0)
                 : savedState;
@@ -70,6 +79,14 @@ public class AgentLoopService {
             state = new AgentState(relevantContext.userGoal(), plan, result, critique, round);
 
             if (mediaId != null) checkpointService.saveCriticState(mediaId, state);
+            if (mediaId != null) {
+                String message = critique.passed()
+                        ? "Critic 校验通过，正在整理结构化结果"
+                        : "Critic 发现证据缺口，正在定向补充分析";
+                taskEventService.publishAnalysis(mediaId, relevantContext.userGoal(),
+                        TaskStatus.of(TaskStatus.State.PROCESSING, message),
+                        critique.passed() ? "CRITIC_PASSED" : "CRITIC_RETRY_REQUIRED");
+            }
             if (critique.passed()) {
                 break;
             }

@@ -5,6 +5,7 @@ import com.example.server.entity.MediaFile;
 import com.example.server.service.AudioExportService;
 import com.example.server.service.AuthService;
 import com.example.server.service.MediaService;
+import com.example.server.service.TaskEventService;
 import com.example.server.service.TranscriptionTaskService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -34,13 +36,16 @@ public class MediaProcessingController {
     private final AudioExportService audioExportService;
     private final MediaService mediaService;
     private final TranscriptionTaskService transcriptionTaskService;
+    private final TaskEventService taskEventService;
 
     public MediaProcessingController(AudioExportService audioExportService,
                                      MediaService mediaService,
-                                     TranscriptionTaskService transcriptionTaskService) {
+                                     TranscriptionTaskService transcriptionTaskService,
+                                     TaskEventService taskEventService) {
         this.audioExportService = audioExportService;
         this.mediaService = mediaService;
         this.transcriptionTaskService = transcriptionTaskService;
+        this.taskEventService = taskEventService;
     }
 
     @PostMapping("/transcribe")
@@ -67,6 +72,19 @@ public class MediaProcessingController {
             @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
         MediaFile mediaFile = mediaService.requireOwnedMedia(id, userId);
         return transcriptionTaskService.status(mediaFile);
+    }
+
+    @GetMapping(value = "/transcription-events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter transcriptionEvents(
+            @RequestParam Long id,
+            @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
+        MediaFile mediaFile = mediaService.requireOwnedMedia(id, userId);
+        return taskEventService.subscribe(
+                id,
+                TaskEventService.TRANSCRIPTION,
+                "",
+                transcriptionTaskService.status(mediaFile),
+                "TRANSCRIPTION");
     }
 
     @GetMapping("/download")

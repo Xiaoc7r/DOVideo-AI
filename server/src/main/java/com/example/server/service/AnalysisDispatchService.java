@@ -2,6 +2,7 @@ package com.example.server.service;
 
 import com.example.server.dto.AgentFeedback;
 import com.example.server.dto.AnalysisTaskMsg;
+import com.example.server.dto.TaskStatus;
 import com.example.server.entity.MediaFile;
 import com.example.server.utils.AnalysisTaskKeys;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
@@ -29,18 +30,21 @@ public class AnalysisDispatchService {
     private final StringRedisTemplate redisTemplate;
     private final RocketMQTemplate rocketMQTemplate;
     private final RedissonClient redissonClient;
+    private final TaskEventService taskEventService;
     private final String analysisTopic;
 
     public AnalysisDispatchService(AiService aiService,
                                    StringRedisTemplate redisTemplate,
                                    RocketMQTemplate rocketMQTemplate,
                                    RedissonClient redissonClient,
+                                   TaskEventService taskEventService,
                                    @Value("${rocketmq.topic.video-analysis:video-analysis-topic}")
                                    String analysisTopic) {
         this.aiService = aiService;
         this.redisTemplate = redisTemplate;
         this.rocketMQTemplate = rocketMQTemplate;
         this.redissonClient = redissonClient;
+        this.taskEventService = taskEventService;
         this.analysisTopic = analysisTopic;
     }
 
@@ -66,6 +70,8 @@ public class AnalysisDispatchService {
             rocketMQTemplate.convertAndSend(
                     analysisTopic,
                     new AnalysisTaskMsg(mediaId, action, contentHash, goal));
+            taskEventService.publishAnalysis(mediaId, goal,
+                    TaskStatus.of(TaskStatus.State.QUEUED, "任务已进入异步分析队列"), "QUEUED");
             return SubmissionResult.ACCEPTED;
         } catch (RuntimeException e) {
             redisTemplate.delete(activeKey);

@@ -9,5 +9,6 @@ client/dist/
 mysql/data/
 mysql/logs/
 redis/data/
+qdrant/data/
 minio/data/
  

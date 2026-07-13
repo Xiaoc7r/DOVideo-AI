@@ -23,15 +23,18 @@ public class LongVideoContextService {
     private final EmbeddingUtils embeddingUtils;
     private final AgentTelemetry telemetry;
     private final AgentCheckpointService checkpointService;
+    private final QdrantVectorStore vectorStore;
 
     public LongVideoContextService(DeepSeekUtils deepSeekUtils,
                                    EmbeddingUtils embeddingUtils,
                                    AgentTelemetry telemetry,
-                                   AgentCheckpointService checkpointService) {
+                                   AgentCheckpointService checkpointService,
+                                   QdrantVectorStore vectorStore) {
         this.deepSeekUtils = deepSeekUtils;
         this.embeddingUtils = embeddingUtils;
         this.telemetry = telemetry;
         this.checkpointService = checkpointService;
+        this.vectorStore = vectorStore;
     }
 
     public VideoContext selectRelevant(VideoContext context) {
@@ -47,19 +50,18 @@ public class LongVideoContextService {
         List<VideoChunk> chunks = mediaId == null ? null : checkpointService.loadChunks(mediaId);
         if (chunks == null || chunks.isEmpty()) {
             chunks = buildChunks(context.segments());
-            if (mediaId != null) checkpointService.saveChunks(mediaId, chunks);
+            if (mediaId != null) {
+                checkpointService.saveChunks(mediaId, chunks);
+                indexChunks(mediaId, chunks);
+            }
         } else {
             telemetry.incrementCurrent("chunkCheckpointHits", 1);
+            indexChunks(mediaId, chunks);
         }
         List<Double> queryEmbedding = safeEmbed(context.userGoal());
 
-        List<VideoChunk> rankedChunks = chunks.stream()
-                .sorted(Comparator.comparingDouble(
-                        (VideoChunk chunk) -> hybridScore(
-                                context.userGoal(), queryEmbedding, chunk)
-                ).reversed())
-                .limit(TOP_K)
-                .toList();
+        List<VideoChunk> rankedChunks = rankChunks(
+                mediaId, context.userGoal(), queryEmbedding, chunks);
         if (!rankedChunks.isEmpty()) {
             telemetry.valueCurrent("retrievalTopScore",
                     hybridScore(context.userGoal(), queryEmbedding, rankedChunks.get(0)));
@@ -144,13 +146,49 @@ public class LongVideoContextService {
     }
 
     private double hybridScore(String goal, List<Double> queryEmbedding, VideoChunk chunk) {
+        return cosine(queryEmbedding, chunk.embedding()) * 0.7 + keywordScore(goal, chunk) * 0.3;
+    }
+
+    private double keywordScore(String goal, VideoChunk chunk) {
         String normalizedGoal = normalize(goal);
         long matched = chunk.keywords().stream()
                 .filter(keyword -> !keyword.isBlank() && normalizedGoal.contains(normalize(keyword)))
                 .count();
-        double keywordScore = chunk.keywords().isEmpty() ? 0 : (double) matched / chunk.keywords().size();
-        if (queryEmbedding.isEmpty() || chunk.embedding().isEmpty()) return keywordScore;
-        return cosine(queryEmbedding, chunk.embedding()) * 0.7 + keywordScore * 0.3;
+        return chunk.keywords().isEmpty() ? 0 : (double) matched / chunk.keywords().size();
+    }
+
+    private List<VideoChunk> rankChunks(Long mediaId,
+                                        String goal,
+                                        List<Double> queryEmbedding,
+                                        List<VideoChunk> chunks) {
+        Map<String, Double> vectorScores = new LinkedHashMap<>();
+        if (mediaId != null && !queryEmbedding.isEmpty()) {
+            try {
+                vectorStore.search(mediaId, queryEmbedding, Math.max(TOP_K * 2, TOP_K)).forEach(hit ->
+                        vectorScores.put(hit.startMs() + ":" + hit.endMs(), hit.score()));
+            } catch (RuntimeException e) {
+                telemetry.incrementCurrent("vectorStoreFallbacks", 1);
+            }
+        }
+        return chunks.stream()
+                .sorted(Comparator.comparingDouble((VideoChunk chunk) -> {
+                    Double score = vectorScores.get(chunk.startMs() + ":" + chunk.endMs());
+                    return score == null
+                            ? hybridScore(goal, queryEmbedding, chunk)
+                            : score * 0.7 + keywordScore(goal, chunk) * 0.3;
+                }).reversed())
+                .limit(TOP_K)
+                .toList();
+    }
+
+    private void indexChunks(Long mediaId, List<VideoChunk> chunks) {
+        try {
+            vectorStore.upsert(mediaId, chunks);
+            telemetry.incrementCurrent("vectorStoreWrites", chunks.size());
+        } catch (RuntimeException e) {
+            // 向量库挂了仍可用本地向量和关键词完成检索，分析链路不用跟着停。
+            telemetry.incrementCurrent("vectorStoreFallbacks", 1);
+        }
     }
 
     private double cosine(List<Double> left, List<Double> right) {

@@ -2,6 +2,7 @@ package com.example.server.service;
 
 import com.example.server.dto.AgentFeedback;
 import com.example.server.dto.AgentState;
+import com.example.server.dto.TaskStatus;
 import com.example.server.dto.VideoChunk;
 import com.example.server.dto.VideoContext;
 import com.example.server.entity.MediaFile;
@@ -23,19 +24,22 @@ public class AiService {
     private final AgentCheckpointService checkpointService;
     private final AgentTelemetry telemetry;
     private final MediaService mediaService;
+    private final TaskEventService taskEventService;
 
     public AiService(MediaFileMapper mediaFileMapper,
                      VideoContextService videoContextService,
                      AgentLoopService agentLoopService,
                      AgentCheckpointService checkpointService,
                      AgentTelemetry telemetry,
-                     MediaService mediaService) {
+                     MediaService mediaService,
+                     TaskEventService taskEventService) {
         this.mediaFileMapper = mediaFileMapper;
         this.videoContextService = videoContextService;
         this.agentLoopService = agentLoopService;
         this.checkpointService = checkpointService;
         this.telemetry = telemetry;
         this.mediaService = mediaService;
+        this.taskEventService = taskEventService;
     }
 
     public void asyncAnalyze(Long mediaId, String userGoal) {
@@ -58,6 +62,9 @@ public class AiService {
 
             VideoContext videoContext = checkpointService.loadContext(mediaId);
             if (videoContext == null) {
+                taskEventService.publishAnalysis(mediaId, userGoal,
+                        TaskStatus.of(TaskStatus.State.PROCESSING, "正在并行提取语音与关键帧"),
+                        "VIDEO_CONTEXT");
                 long contextStarted = System.nanoTime();
                 try {
                     videoContext = videoContextService.build(mediaFile.getFilePath(), userGoal, traceId);
@@ -73,6 +80,9 @@ public class AiService {
             }
 
             mediaFile.setTranscriptText(videoContext.transcriptText());
+            taskEventService.publishAnalysis(mediaId, userGoal,
+                    TaskStatus.of(TaskStatus.State.PROCESSING, "多模态上下文已就绪，Agent 开始分析"),
+                    "AGENT_LOOP");
             long agentStarted = System.nanoTime();
             try {
                 agentState = agentLoopService.run(mediaId, videoContext);

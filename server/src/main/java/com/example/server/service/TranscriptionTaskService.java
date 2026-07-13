@@ -21,21 +21,26 @@ public class TranscriptionTaskService {
     private final VideoTranscriptionService videoTranscriptionService;
     private final MediaService mediaService;
     private final StringRedisTemplate redisTemplate;
+    private final TaskEventService taskEventService;
 
     public TranscriptionTaskService(MediaFileMapper mediaFileMapper,
                                     VideoTranscriptionService videoTranscriptionService,
                                     MediaService mediaService,
-                                    StringRedisTemplate redisTemplate) {
+                                    StringRedisTemplate redisTemplate,
+                                    TaskEventService taskEventService) {
         this.mediaFileMapper = mediaFileMapper;
         this.videoTranscriptionService = videoTranscriptionService;
         this.mediaService = mediaService;
         this.redisTemplate = redisTemplate;
+        this.taskEventService = taskEventService;
     }
 
     public boolean queue(Long mediaId) {
         Boolean accepted = redisTemplate.opsForValue().setIfAbsent(activeKey(mediaId), "1", ACTIVE_TTL);
         if (!Boolean.TRUE.equals(accepted)) return false;
         setState(mediaId, TaskStatus.State.QUEUED, ACTIVE_TTL);
+        taskEventService.publishTranscription(mediaId,
+                TaskStatus.of(TaskStatus.State.QUEUED, "文字提取任务已排队"), "QUEUED");
         return true;
     }
 
@@ -49,14 +54,20 @@ public class TranscriptionTaskService {
 
         try {
             setState(mediaId, TaskStatus.State.PROCESSING, ACTIVE_TTL);
+            taskEventService.publishTranscription(mediaId,
+                    TaskStatus.of(TaskStatus.State.PROCESSING, "正在识别视频语音"), "ASR");
             mediaFile.setTranscriptText(videoTranscriptionService.transcribe(
                     mediaService.readableSource(mediaFile.getFilePath())));
             mediaFileMapper.updateById(mediaFile);
             mediaService.invalidateUserList(mediaFile.getUserId());
             setState(mediaId, TaskStatus.State.COMPLETED, Duration.ofDays(7));
+            taskEventService.publishTranscription(mediaId,
+                    TaskStatus.completed(mediaFile.getTranscriptText()), "COMPLETED");
             log.info("transcription_completed mediaId={}", mediaId);
         } catch (Exception e) {
             setState(mediaId, TaskStatus.State.FAILED, Duration.ofHours(1));
+            taskEventService.publishTranscription(mediaId,
+                    TaskStatus.of(TaskStatus.State.FAILED, "文字提取失败，请稍后重试"), "FAILED");
             log.error("transcription_failed mediaId={}", mediaId, e);
         } finally {
             clearActive(mediaId);
@@ -66,6 +77,8 @@ public class TranscriptionTaskService {
     public void rejectQueued(Long mediaId) {
         clearActive(mediaId);
         setState(mediaId, TaskStatus.State.FAILED, Duration.ofMinutes(10));
+        taskEventService.publishTranscription(mediaId,
+                TaskStatus.of(TaskStatus.State.FAILED, "任务队列已满，请稍后重试"), "DISPATCH_FAILED");
     }
 
     public TaskStatus status(MediaFile mediaFile) {
