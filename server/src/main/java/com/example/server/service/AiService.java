@@ -3,18 +3,18 @@ package com.example.server.service;
 import com.example.server.dto.AgentFeedback;
 import com.example.server.dto.AgentState;
 import com.example.server.dto.TaskStatus;
+import com.example.server.dto.VideoChunk;
 import com.example.server.dto.VideoContext;
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
-import com.example.server.strategy.AiAnalysisStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.List;
 
 @Service
 public class AiService {
@@ -22,7 +22,7 @@ public class AiService {
     private static final Logger log = LoggerFactory.getLogger(AiService.class);
 
     private final MediaFileMapper mediaFileMapper;
-    private final AiAnalysisStrategy aiAnalysisStrategy;
+    private final VideoTranscriptionService videoTranscriptionService;
     private final VideoContextService videoContextService;
     private final AgentLoopService agentLoopService;
     private final AgentCheckpointService checkpointService;
@@ -31,7 +31,7 @@ public class AiService {
     private final StringRedisTemplate redisTemplate;
 
     public AiService(MediaFileMapper mediaFileMapper,
-                     @Qualifier("defaultAiStrategy") AiAnalysisStrategy aiAnalysisStrategy,
+                     VideoTranscriptionService videoTranscriptionService,
                      VideoContextService videoContextService,
                      AgentLoopService agentLoopService,
                      AgentCheckpointService checkpointService,
@@ -39,7 +39,7 @@ public class AiService {
                      MediaService mediaService,
                      StringRedisTemplate redisTemplate) {
         this.mediaFileMapper = mediaFileMapper;
-        this.aiAnalysisStrategy = aiAnalysisStrategy;
+        this.videoTranscriptionService = videoTranscriptionService;
         this.videoContextService = videoContextService;
         this.agentLoopService = agentLoopService;
         this.checkpointService = checkpointService;
@@ -53,6 +53,7 @@ public class AiService {
         telemetry.bind(traceId);
         MediaFile mediaFile = mediaFileMapper.selectById(mediaId);
         if (mediaFile == null) {
+            telemetry.flush(traceId);
             telemetry.clear();
             throw new IllegalArgumentException("media does not exist: " + mediaId);
         }
@@ -94,13 +95,11 @@ public class AiService {
             log.info("agent_analysis_completed traceId={} mediaId={} rounds={}",
                     traceId, mediaId, agentState.round());
         } catch (Exception e) {
-            mediaFile.setAiSummary("❌ 分析失败，请稍后重试");
-            mediaFileMapper.updateById(mediaFile);
-            mediaService.invalidateUserList(mediaFile.getUserId());
             checkpointService.saveFailure(mediaId, userGoal, "AI_ANALYSIS", e);
             log.error("agent_analysis_failed traceId={} mediaId={}", traceId, mediaId, e);
             throw new IllegalStateException("AI analysis failed", e);
         } finally {
+            telemetry.flush(traceId);
             telemetry.clear();
         }
     }
@@ -113,18 +112,16 @@ public class AiService {
         telemetry.bind(traceId);
         try {
             VideoContext followUpContext = new VideoContext(context.source(), question, context.segments());
-            return agentLoopService.run(followUpContext).result().toMarkdown();
+            return agentLoopService.run(mediaId, followUpContext).result().toMarkdown();
         } finally {
+            telemetry.flush(traceId);
             telemetry.clear();
         }
     }
 
-    public String reviseAndRerun(AgentFeedback feedback) {
+    public String prepareRevision(AgentFeedback feedback) {
         AgentFeedback normalized = feedback.normalized();
         checkpointService.saveFeedback(normalized);
-
-        VideoContext context = checkpointService.loadContext(normalized.mediaId());
-        if (context == null) throw new IllegalStateException("视频尚未完成 VideoContext 构建");
 
         String goal = normalized.correctedGoal() == null || normalized.correctedGoal().isBlank()
                 ? normalized.goal()
@@ -133,21 +130,23 @@ public class AiService {
                 ? null
                 : new AgentState.AgentPlan(goal, normalized.correctedTasks());
         checkpointService.resetForRerun(normalized.mediaId(), goal, correctedPlan);
+        return goal;
+    }
 
-        String traceId = telemetry.start(normalized.mediaId());
-        telemetry.bind(traceId);
-        long started = System.nanoTime();
-        try {
-            VideoContext revisedContext = new VideoContext(context.source(), goal, context.segments());
-            AgentState state = agentLoopService.run(normalized.mediaId(), revisedContext);
-            telemetry.stage(traceId, "HUMAN_REVISE", started, true);
-            return state.result().toMarkdown();
-        } catch (RuntimeException e) {
-            telemetry.stage(traceId, "HUMAN_REVISE", started, false);
-            throw e;
-        } finally {
-            telemetry.clear();
-        }
+    public boolean reuseResult(Long mediaId, Long sourceMediaId, AgentState state) {
+        MediaFile mediaFile = mediaFileMapper.selectById(mediaId);
+        if (mediaFile == null) throw new IllegalArgumentException("media does not exist: " + mediaId);
+
+        VideoContext sourceContext = checkpointService.loadContext(sourceMediaId);
+        if (sourceContext == null) return false;
+        checkpointService.saveContext(mediaId, new VideoContext(
+                mediaFile.getFilePath(), "", sourceContext.segments()));
+        List<VideoChunk> chunks = checkpointService.loadChunks(sourceMediaId);
+        if (chunks != null && !chunks.isEmpty()) checkpointService.saveChunks(mediaId, chunks);
+        checkpointService.saveResult(mediaId, new AgentState(
+                state.goal(), state.plan(), state.result(), state.critique(), state.round()));
+        persistResult(mediaFile, state);
+        return true;
     }
 
     @Async("aiTaskExecutor")
@@ -160,7 +159,7 @@ public class AiService {
 
         try {
             setTranscriptionState(mediaId, TaskStatus.State.PROCESSING, Duration.ofHours(2));
-            mediaFile.setTranscriptText(aiAnalysisStrategy.transcribe(
+            mediaFile.setTranscriptText(videoTranscriptionService.transcribe(
                     mediaService.readableSource(mediaFile.getFilePath())));
             mediaFileMapper.updateById(mediaFile);
             mediaService.invalidateUserList(mediaFile.getUserId());

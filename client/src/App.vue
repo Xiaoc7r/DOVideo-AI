@@ -213,7 +213,23 @@
               <div v-if="sidebar.plan?.tasks?.length || traceStages.length" class="agent-inspector">
                 <div v-if="sidebar.plan?.tasks?.length" class="agent-meta-block">
                   <span class="meta-label">Planner 任务</span>
-                  <ol><li v-for="task in sidebar.plan.tasks" :key="task">{{ task }}</li></ol>
+                  <div v-if="sidebar.editingPlan" class="plan-editor">
+                    <div v-for="(_, index) in sidebar.planDraft" :key="index" class="plan-editor-row">
+                      <input v-model="sidebar.planDraft[index]" maxlength="500" :aria-label="`任务 ${index + 1}`" />
+                      <button type="button" title="删除任务" @click="removePlanTask(index)">×</button>
+                    </div>
+                    <button v-if="sidebar.planDraft.length < 8" type="button" @click="addPlanTask">添加任务</button>
+                    <div class="plan-editor-actions">
+                      <button type="button" @click="cancelPlanEdit">取消</button>
+                      <button type="button" :disabled="sidebar.rerunLoading" @click="rerunWithPlan">
+                        {{ sidebar.rerunLoading ? '提交中' : '按新计划重跑' }}
+                      </button>
+                    </div>
+                  </div>
+                  <template v-else>
+                    <ol><li v-for="task in sidebar.plan.tasks" :key="task">{{ task }}</li></ol>
+                    <button type="button" class="plan-edit-trigger" @click="startPlanEdit">调整计划</button>
+                  </template>
                 </div>
                 <div v-if="traceStages.length" class="agent-meta-block">
                   <span class="meta-label">执行轨迹</span>
@@ -309,7 +325,10 @@ const sidebar = ref({
   plan: null,
   trace: null,
   evaluation: null,
-  feedback: null
+  feedback: null,
+  editingPlan: false,
+  planDraft: [],
+  rerunLoading: false
 })
 const currentUser = ref(null)
 const showAuthModal = ref(false)
@@ -785,7 +804,10 @@ const openAgent = (item) => {
     plan: null,
     trace: null,
     evaluation: null,
-    feedback: null
+    feedback: null,
+    editingPlan: false,
+    planDraft: [],
+    rerunLoading: false
   }
 }
 
@@ -807,7 +829,7 @@ const showDemoResult = () => {
   sidebar.value.mode = 'result'
   sidebar.value.loading = false
   sidebar.value.content = DEMO_RESULT
-  sidebar.value.plan = DEMO_PLAN
+  if (!sidebar.value.plan) sidebar.value.plan = DEMO_PLAN
   sidebar.value.trace = DEMO_TRACE
   sidebar.value.evaluation = DEMO_EVALUATION
 }
@@ -824,7 +846,7 @@ const refreshAgentMeta = async (id, goal, includeEvaluation) => {
     if (sidebar.value.mediaId !== id) return
     const planText = responses[0].ok ? await responses[0].text() : ''
     const traceText = responses[1].ok ? await responses[1].text() : ''
-    if (planText) sidebar.value.plan = JSON.parse(planText)
+    if (planText && !sidebar.value.editingPlan) sidebar.value.plan = JSON.parse(planText)
     if (traceText) sidebar.value.trace = JSON.parse(traceText)
     if (includeEvaluation && responses[2]?.ok) {
       const evaluationText = await responses[2].text()
@@ -832,6 +854,65 @@ const refreshAgentMeta = async (id, goal, includeEvaluation) => {
     }
   } catch (error) {
     console.warn('Agent metadata unavailable', error)
+  }
+}
+
+const startPlanEdit = () => {
+  sidebar.value.planDraft = [...(sidebar.value.plan?.tasks || [])]
+  sidebar.value.editingPlan = true
+}
+
+const cancelPlanEdit = () => {
+  sidebar.value.editingPlan = false
+  sidebar.value.planDraft = []
+}
+
+const addPlanTask = () => {
+  if (sidebar.value.planDraft.length < 8) sidebar.value.planDraft.push('')
+}
+
+const removePlanTask = (index) => {
+  if (sidebar.value.planDraft.length > 1) sidebar.value.planDraft.splice(index, 1)
+}
+
+const rerunWithPlan = async () => {
+  const tasks = sidebar.value.planDraft.map(task => task.trim()).filter(Boolean)
+  if (!tasks.length || tasks.length > 8) {
+    showMsg('计划需保留 1 至 8 个有效任务', true)
+    return
+  }
+  if (DEMO_MODE) {
+    sidebar.value.plan = { ...DEMO_PLAN, tasks }
+    cancelPlanEdit()
+    sidebar.value.loading = true
+    setTimeout(showDemoResult, 450)
+    return
+  }
+
+  sidebar.value.rerunLoading = true
+  try {
+    const response = await apiRequest('/analysis/agent-revise', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mediaId: sidebar.value.mediaId,
+        goal: sidebar.value.goal,
+        correctedTasks: tasks,
+        comment: '用户调整 Planner 任务后重新执行'
+      })
+    })
+    const message = await response.text()
+    if (!response.ok) throw new Error(message || '重新提交失败')
+    sidebar.value.plan = { ...sidebar.value.plan, tasks }
+    sidebar.value.editingPlan = false
+    sidebar.value.planDraft = []
+    sidebar.value.content = ''
+    sidebar.value.loading = true
+    startPolling(sidebar.value.mediaId, 'ai', sidebar.value.goal)
+  } catch (error) {
+    showMsg(error.message || '重新提交失败', true)
+  } finally {
+    sidebar.value.rerunLoading = false
   }
 }
 
@@ -1197,6 +1278,13 @@ html, body, #app {
 .meta-label { display: block; color: var(--accent-lime); font-size: 0.78rem; font-weight: 700; margin-bottom: 10px; }
 .agent-meta-block ol { padding-left: 20px; color: #c9cbd0; }
 .agent-meta-block li { margin: 7px 0; }
+.plan-editor { display: grid; gap: 8px; margin-top: 12px; }
+.plan-editor-row { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 8px; }
+.plan-editor input { min-width: 0; border: 1px solid var(--border-tech); background: #090b0e; color: var(--text-main); padding: 9px 10px; }
+.plan-editor button, .plan-edit-trigger { border: 1px solid var(--border-tech); background: transparent; color: var(--text-sub); padding: 7px 10px; cursor: pointer; }
+.plan-editor button:hover, .plan-edit-trigger:hover { color: var(--accent-lime); border-color: var(--accent-lime); }
+.plan-editor-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.plan-edit-trigger { margin-top: 8px; }
 .stage-list { display: flex; flex-wrap: wrap; gap: 8px; }
 .stage-list span, .quality-row span {
   border: 1px solid var(--border-tech); border-radius: 4px; padding: 6px 8px; color: var(--text-sub); font-size: 0.78rem;

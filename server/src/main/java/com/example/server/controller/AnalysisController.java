@@ -5,7 +5,6 @@ import com.example.server.dto.AgentState;
 import com.example.server.dto.AnalysisTaskMsg;
 import com.example.server.dto.TaskStatus;
 import com.example.server.entity.MediaFile;
-import com.example.server.mapper.MediaFileMapper;
 import com.example.server.service.AgentCheckpointService;
 import com.example.server.service.AgentEvaluationService;
 import com.example.server.service.AgentTelemetry;
@@ -51,7 +50,6 @@ public class AnalysisController {
     private static final Logger log = LoggerFactory.getLogger(AnalysisController.class);
     private static final int MAX_GOAL_LENGTH = 500;
 
-    private final MediaFileMapper mediaFileMapper;
     private final AiService aiService;
     private final AgentCheckpointService checkpointService;
     private final AgentEvaluationService evaluationService;
@@ -62,8 +60,7 @@ public class AnalysisController {
     private final RedissonClient redissonClient;
     private final String analysisTopic;
 
-    public AnalysisController(MediaFileMapper mediaFileMapper,
-                              AiService aiService,
+    public AnalysisController(AiService aiService,
                               AgentCheckpointService checkpointService,
                               AgentEvaluationService evaluationService,
                               AgentTelemetry telemetry,
@@ -72,7 +69,6 @@ public class AnalysisController {
                               RocketMQTemplate rocketMQTemplate,
                               RedissonClient redissonClient,
                               @Value("${rocketmq.topic.video-analysis:video-analysis-topic}") String analysisTopic) {
-        this.mediaFileMapper = mediaFileMapper;
         this.aiService = aiService;
         this.checkpointService = checkpointService;
         this.evaluationService = evaluationService;
@@ -91,6 +87,16 @@ public class AnalysisController {
             @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
         String normalizedGoal = normalizeText(goal, "分析目标");
         MediaFile mediaFile = mediaService.requireOwnedMedia(id, userId);
+        if (checkpointService.loadResult(id, normalizedGoal) != null) {
+            return ResponseEntity.ok("已有可复用的分析结果");
+        }
+        return enqueueAnalysis(mediaFile, normalizedGoal, "START_ANALYSIS");
+    }
+
+    private ResponseEntity<String> enqueueAnalysis(MediaFile mediaFile,
+                                                     String normalizedGoal,
+                                                     String action) {
+        Long id = mediaFile.getId();
 
         RRateLimiter rateLimiter = redissonClient.getRateLimiter("limit:ai:global");
         rateLimiter.trySetRate(RateType.OVERALL, 10, 1, RateIntervalUnit.MINUTES);
@@ -98,7 +104,7 @@ public class AnalysisController {
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body("系统繁忙，请稍后再试");
         }
 
-        String contentHash = contentHash(id);
+        String contentHash = "REVISE_ANALYSIS".equals(action) ? "media-" + id : contentHash(id);
         String goalDigest = AnalysisTaskKeys.goalDigest(normalizedGoal);
         String activeKey = AnalysisTaskKeys.active(contentHash, goalDigest);
         Boolean accepted = redisTemplate.opsForValue().setIfAbsent(
@@ -108,16 +114,13 @@ public class AnalysisController {
         }
 
         try {
-            mediaFile.setAiSummary("分析任务已排队");
-            mediaFileMapper.updateById(mediaFile);
-            mediaService.invalidateUserList(mediaFile.getUserId());
             rocketMQTemplate.convertAndSend(
                     analysisTopic,
-                    new AnalysisTaskMsg(id, "START_ANALYSIS", contentHash, normalizedGoal));
+                    new AnalysisTaskMsg(id, action, contentHash, normalizedGoal));
             return ResponseEntity.status(HttpStatus.ACCEPTED).body("任务已提交");
         } catch (RuntimeException e) {
             redisTemplate.delete(activeKey);
-            log.error("analysis_dispatch_failed mediaId={} userId={}", id, userId, e);
+            log.error("analysis_dispatch_failed mediaId={} userId={}", id, mediaFile.getUserId(), e);
             return ResponseEntity.internalServerError().body("任务提交失败");
         }
     }
@@ -167,8 +170,11 @@ public class AnalysisController {
             @RequestBody AgentFeedback feedback,
             @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
         validateFeedback(feedback);
-        mediaService.requireOwnedMedia(feedback.mediaId(), userId);
-        return ResponseEntity.ok(aiService.reviseAndRerun(feedback));
+        MediaFile mediaFile = mediaService.requireOwnedMedia(feedback.mediaId(), userId);
+        String revisedGoal = aiService.prepareRevision(feedback);
+        redisTemplate.delete(AnalysisTaskKeys.completed(
+                "media-" + mediaFile.getId(), AnalysisTaskKeys.goalDigest(revisedGoal)));
+        return enqueueAnalysis(mediaFile, revisedGoal, "REVISE_ANALYSIS");
     }
 
     @GetMapping("/agent-feedback")
@@ -307,6 +313,9 @@ public class AnalysisController {
         if (feedback.comment() != null && feedback.comment().length() > 2_000) {
             throw new IllegalArgumentException("反馈说明不能超过 2000 字");
         }
+        if (feedback.correctedGoal() != null && !feedback.correctedGoal().isBlank()) {
+            normalizeText(feedback.correctedGoal(), "修正后的分析目标");
+        }
         if (feedback.errorType() != null && feedback.errorType().length() > 64) {
             throw new IllegalArgumentException("错误类型不能超过 64 字");
         }
@@ -314,6 +323,9 @@ public class AnalysisController {
                 && (feedback.correctedTasks().size() > 8
                 || feedback.correctedTasks().stream().anyMatch(task -> task == null || task.length() > 500))) {
             throw new IllegalArgumentException("修正任务最多 8 条且每条不能超过 500 字");
+        }
+        if (feedback.evidenceTimestamp() != null && feedback.evidenceTimestamp() < 0) {
+            throw new IllegalArgumentException("证据时间戳不能为负数");
         }
     }
 }

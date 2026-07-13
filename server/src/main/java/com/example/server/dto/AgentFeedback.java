@@ -23,7 +23,10 @@ public record AgentFeedback(
                 errorType == null ? null : errorType.trim(),
                 comment == null ? null : comment.trim(),
                 correctedGoal == null ? null : correctedGoal.trim(),
-                correctedTasks == null ? List.of() : List.copyOf(correctedTasks),
+                correctedTasks == null ? List.of() : correctedTasks.stream()
+                        .filter(task -> task != null && !task.isBlank())
+                        .map(String::trim)
+                        .toList(),
                 evidenceTimestamp,
                 evidenceAccepted,
                 createdAt == null ? Instant.now() : createdAt

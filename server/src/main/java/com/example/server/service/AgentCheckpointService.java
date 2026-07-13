@@ -58,7 +58,8 @@ public class AgentCheckpointService {
                     ? null
                     : objectMapper.readValue(value.toString(), new TypeReference<List<VideoChunk>>() { });
         } catch (Exception e) {
-            throw new IllegalStateException("读取长视频分块 Checkpoint 失败", e);
+            log.warn("video_chunk_checkpoint_read_failed mediaId={}", mediaId, e);
+            return null;
         }
     }
 
@@ -130,7 +131,13 @@ public class AgentCheckpointService {
             Object value = redisTemplate.opsForHash().get(key, field);
             return value == null ? null : objectMapper.readValue(value.toString(), type);
         } catch (Exception e) {
-            throw new IllegalStateException("读取 Agent Checkpoint 失败", e);
+            log.warn("agent_checkpoint_read_failed key={} field={}", key, field, e);
+            try {
+                redisTemplate.opsForHash().delete(key, field);
+            } catch (RuntimeException cleanupError) {
+                e.addSuppressed(cleanupError);
+            }
+            return null;
         }
     }
 

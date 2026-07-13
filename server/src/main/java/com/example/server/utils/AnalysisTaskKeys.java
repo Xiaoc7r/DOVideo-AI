@@ -42,7 +42,7 @@ public final class AnalysisTaskKeys {
         return "lock:analysis:" + contentHash + ":" + goalDigest;
     }
 
-    public static String completed(Long mediaId, String goalDigest) {
-        return "analysis:completed:" + mediaId + ":" + goalDigest;
+    public static String completed(String contentScope, String goalDigest) {
+        return "analysis:completed:" + contentScope + ":" + goalDigest;
     }
 }

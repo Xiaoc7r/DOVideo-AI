@@ -40,6 +40,8 @@ public class YtDlpUtils {
         command.add("30");
         command.add("--retries");
         command.add("3");
+        command.add("--max-filesize");
+        command.add("2048M");
         command.add("--recode-video");
         command.add("mp4");
         if (ffmpegDir != null && !ffmpegDir.isBlank()) {

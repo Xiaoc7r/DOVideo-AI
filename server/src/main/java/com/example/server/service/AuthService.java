@@ -90,7 +90,13 @@ public class AuthService {
 
     public boolean loginAttemptAllowed(String username) {
         String value = redisTemplate.opsForValue().get(LOGIN_FAILURE_PREFIX + username);
-        return value == null || Long.parseLong(value) < MAX_LOGIN_FAILURES;
+        if (value == null) return true;
+        try {
+            return Long.parseLong(value) < MAX_LOGIN_FAILURES;
+        } catch (NumberFormatException e) {
+            redisTemplate.delete(LOGIN_FAILURE_PREFIX + username);
+            return true;
+        }
     }
 
     public void recordLoginFailure(String username) {

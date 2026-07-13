@@ -1,9 +1,13 @@
 package com.example.server.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -18,10 +22,18 @@ public class AgentTelemetry {
 
     private static final Logger log = LoggerFactory.getLogger(AgentTelemetry.class);
     private static final int MAX_TRACES = 500;
+    private static final Duration TRACE_TTL = Duration.ofDays(7);
 
     private final Map<String, TraceData> traces = new ConcurrentHashMap<>();
     private final Map<Long, String> latestTraceByTask = new ConcurrentHashMap<>();
     private final ThreadLocal<String> currentTrace = new ThreadLocal<>();
+    private final StringRedisTemplate redisTemplate;
+    private final ObjectMapper objectMapper;
+
+    public AgentTelemetry(StringRedisTemplate redisTemplate, ObjectMapper objectMapper) {
+        this.redisTemplate = redisTemplate;
+        this.objectMapper = objectMapper;
+    }
 
     public String start(Long taskId) {
         if (traces.size() >= MAX_TRACES) {
@@ -36,6 +48,7 @@ public class AgentTelemetry {
         traces.put(traceId, new TraceData(traceId, taskId));
         latestTraceByTask.put(taskId, traceId);
         currentTrace.set(traceId);
+        persist(traces.get(traceId));
         log.info("agent_trace traceId={} taskId={} stage=START status=SUCCESS", traceId, taskId);
         return traceId;
     }
@@ -48,6 +61,11 @@ public class AgentTelemetry {
         currentTrace.remove();
     }
 
+    public void flush(String traceId) {
+        TraceData trace = traces.get(traceId);
+        if (trace != null) persist(trace);
+    }
+
     public void stage(String traceId, String stage, long startedNanos, boolean success) {
         TraceData trace = traces.get(traceId);
         if (trace == null) return;
@@ -57,6 +75,7 @@ public class AgentTelemetry {
         if (!success) trace.increment("failedStages", 1);
         log.info("agent_trace traceId={} taskId={} stage={} durationMs={} status={}",
                 traceId, trace.taskId, stage, durationMs, success ? "SUCCESS" : "FAILED");
+        persist(trace);
     }
 
     public void increment(String traceId, String metric, long amount) {
@@ -105,7 +124,36 @@ public class AgentTelemetry {
     public Map<String, Object> latest(Long taskId) {
         String traceId = latestTraceByTask.get(taskId);
         TraceData trace = traceId == null ? null : traces.get(traceId);
-        return trace == null ? Map.of() : trace.snapshot();
+        if (trace != null) return trace.snapshot();
+        try {
+            if (traceId == null) traceId = redisTemplate.opsForValue().get(latestTraceKey(taskId));
+            String snapshot = traceId == null ? null : redisTemplate.opsForValue().get(traceKey(traceId));
+            return snapshot == null
+                    ? Map.of()
+                    : objectMapper.readValue(snapshot, new TypeReference<Map<String, Object>>() { });
+        } catch (Exception e) {
+            log.warn("agent_trace_read_failed taskId={}", taskId, e);
+            return Map.of();
+        }
+    }
+
+    private void persist(TraceData trace) {
+        try {
+            redisTemplate.opsForValue().set(
+                    traceKey(trace.traceId), objectMapper.writeValueAsString(trace.snapshot()), TRACE_TTL);
+            redisTemplate.opsForValue().set(
+                    latestTraceKey(trace.taskId), trace.traceId, TRACE_TTL);
+        } catch (Exception e) {
+            log.warn("agent_trace_persist_failed traceId={} taskId={}", trace.traceId, trace.taskId, e);
+        }
+    }
+
+    private String traceKey(String traceId) {
+        return "agent:trace:" + traceId;
+    }
+
+    private String latestTraceKey(Long taskId) {
+        return "agent:trace:task:" + taskId;
     }
 
     private long estimateTokens(String text) {

@@ -48,6 +48,9 @@ public class MediaService {
     private static final String CHUNK_UPLOAD_KEY_PREFIX = "upload:chunked:";
     private static final String MEDIA_MD5_KEY_PREFIX = "media:md5:";
     private static final long MAX_CHUNK_BYTES = 5L * 1024 * 1024;
+    private static final int MAX_TOTAL_CHUNKS = 410;
+    private static final Set<String> VIDEO_SUFFIXES = Set.of(
+            ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v");
     private static final Path CHUNK_UPLOAD_DIR = Path.of(System.getProperty("java.io.tmpdir"), "dovideo-chunks");
 
     public MediaService(MediaFileMapper mediaFileMapper,
@@ -61,11 +64,9 @@ public class MediaService {
     }
 
     public String initChunkedUpload(String filename, int totalChunks, Long userId) throws IOException {
-        if (filename == null || filename.isBlank()) {
-            throw new IllegalArgumentException("filename is required");
-        }
-        if (totalChunks <= 0) {
-            throw new IllegalArgumentException("totalChunks must be greater than 0");
+        String normalizedFilename = normalizeVideoFilename(filename);
+        if (totalChunks <= 0 || totalChunks > MAX_TOTAL_CHUNKS) {
+            throw new IllegalArgumentException("totalChunks must be between 1 and " + MAX_TOTAL_CHUNKS);
         }
         if (userId == null) {
             throw new SecurityException("missing authenticated user");
@@ -74,7 +75,7 @@ public class MediaService {
         String uploadId = UUID.randomUUID().toString();
         String redisKey = CHUNK_UPLOAD_KEY_PREFIX + uploadId;
         Map<String, String> metadata = new HashMap<>();
-        metadata.put("filename", filename);
+        metadata.put("filename", normalizedFilename);
         metadata.put("totalChunks", String.valueOf(totalChunks));
         metadata.put("userId", String.valueOf(userId));
         redisTemplate.opsForHash().putAll(redisKey, metadata);
@@ -192,7 +193,7 @@ public class MediaService {
 
     public MediaFile saveUploadedMedia(String filename, String fileUrl, Long userId, String md5) {
         MediaFile mediaFile = new MediaFile();
-        mediaFile.setFilename(filename);
+        mediaFile.setFilename(normalizeVideoFilename(filename));
         mediaFile.setFilePath(fileUrl);
         mediaFile.setStatus("COMPLETED");
         mediaFile.setUploadTime(LocalDateTime.now());
@@ -265,6 +266,22 @@ public class MediaService {
         return minioUtils.readableSource(source);
     }
 
+    public String normalizeVideoFilename(String filename) {
+        if (filename == null || filename.isBlank()) {
+            throw new IllegalArgumentException("视频文件名不能为空");
+        }
+        String normalized = filename.replace('\\', '/');
+        normalized = normalized.substring(normalized.lastIndexOf('/') + 1).trim();
+        if (normalized.isBlank() || normalized.length() > 255) {
+            throw new IllegalArgumentException("视频文件名无效或过长");
+        }
+        String suffix = fileSuffix(normalized).toLowerCase(java.util.Locale.ROOT);
+        if (!VIDEO_SUFFIXES.contains(suffix)) {
+            throw new IllegalArgumentException("仅支持 MP4、MOV、MKV、AVI、WEBM 和 M4V 视频");
+        }
+        return normalized;
+    }
+
     public MediaFile requireOwnedMedia(Long mediaId, Long userId) {
         MediaFile mediaFile = mediaFileMapper.selectById(mediaId);
         if (mediaFile == null) throw new NoSuchElementException("文件不存在");
@@ -323,7 +340,7 @@ public class MediaService {
     }
 
     private String userListKey(Long userId) {
-        return "media:list:user:" + userId;
+        return "media:list:v2:user:" + userId;
     }
 
     private String fileSuffix(String filename) {

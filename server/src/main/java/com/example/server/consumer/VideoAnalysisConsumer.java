@@ -1,7 +1,9 @@
 package com.example.server.consumer;
 
 import com.example.server.dto.AnalysisTaskMsg;
+import com.example.server.dto.AgentState;
 import com.example.server.service.AiService;
+import com.example.server.service.AgentCheckpointService;
 import com.example.server.utils.AnalysisTaskKeys;
 import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
@@ -23,13 +25,16 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
     private final AiService aiService;
     private final RedissonClient redissonClient;
     private final StringRedisTemplate redisTemplate;
+    private final AgentCheckpointService checkpointService;
 
     public VideoAnalysisConsumer(AiService aiService,
                                  RedissonClient redissonClient,
-                                 StringRedisTemplate redisTemplate) {
+                                 StringRedisTemplate redisTemplate,
+                                 AgentCheckpointService checkpointService) {
         this.aiService = aiService;
         this.redissonClient = redissonClient;
         this.redisTemplate = redisTemplate;
+        this.checkpointService = checkpointService;
     }
 
     @Override
@@ -43,17 +48,29 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
         String goalDigest = AnalysisTaskKeys.goalDigest(msg.getUserGoal());
         String lockKey = AnalysisTaskKeys.lock(contentHash, goalDigest);
         String activeKey = AnalysisTaskKeys.active(contentHash, goalDigest);
-        String completedKey = AnalysisTaskKeys.completed(mediaId, goalDigest);
+        String completedKey = AnalysisTaskKeys.completed(contentHash, goalDigest);
         RLock lock = redissonClient.getLock(lockKey);
         boolean acquired = false;
         try {
             acquired = lock.tryLock();
-            if (!acquired || Boolean.TRUE.equals(redisTemplate.hasKey(completedKey))) {
+            if (!acquired) {
                 log.info("video_analysis_skipped mediaId={} acquired={}", mediaId, acquired);
                 return;
             }
+            String completedMediaId = redisTemplate.opsForValue().get(completedKey);
+            if (completedMediaId != null) {
+                AgentState reusable = checkpointService.loadResult(
+                        Long.valueOf(completedMediaId), msg.getUserGoal());
+                if (reusable != null && reusable.result() != null
+                        && aiService.reuseResult(mediaId, Long.valueOf(completedMediaId), reusable)) {
+                    log.info("video_analysis_reused mediaId={} sourceMediaId={}", mediaId, completedMediaId);
+                    return;
+                }
+                redisTemplate.delete(completedKey);
+            }
             aiService.asyncAnalyze(mediaId, msg.getUserGoal());
-            redisTemplate.opsForValue().set(completedKey, "1", java.time.Duration.ofDays(7));
+            redisTemplate.opsForValue().set(
+                    completedKey, String.valueOf(mediaId), java.time.Duration.ofDays(7));
         } catch (Exception e) {
             log.error("video_analysis_consume_failed mediaId={}", mediaId, e);
             throw new IllegalStateException("视频分析消费失败，交由 RocketMQ 重试", e);

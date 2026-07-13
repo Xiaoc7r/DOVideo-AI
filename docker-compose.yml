@@ -1,105 +1,66 @@
-version: '3'
 services:
-  # =========================================
-  # 1. MySQL (数据库)
-  # =========================================
   mysql:
     image: mysql:8.0
-    container_name: mysql-media
     ports:
-      - "3307:3306"  # 你的配置里用的是 3307
+      - "3307:3306"
     environment:
-      - MYSQL_ROOT_PASSWORD=root
-      - MYSQL_DATABASE=media_db
-      - TZ=Asia/Shanghai
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+      MYSQL_DATABASE: media_db
+      TZ: Asia/Shanghai
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     volumes:
       - ./mysql/data:/var/lib/mysql
       - ./mysql/logs:/var/log/mysql
-    networks:
-      - my-network
 
-  # =========================================
-  # 2. Redis (缓存 & 分布式锁)
-  # =========================================
   redis:
-    image: redis:latest
-    container_name: redis-media
+    image: redis:7.4-alpine
     ports:
       - "6379:6379"
-    command: redis-server --appendonly yes
-    networks:
-      - my-network
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    volumes:
+      - ./redis/data:/data
 
-  # =========================================
-  # 3. MinIO (对象存储)
-  # =========================================
   minio:
     image: minio/minio
-    container_name: minio
     ports:
-      - "9000:9000"  # API 端口
-      - "9001:9001"  # 控制台端口
+      - "9000:9000"
+      - "9001:9001"
     environment:
-      - MINIO_ROOT_USER=minioadmin
-      - MINIO_ROOT_PASSWORD=minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
     command: server /data --console-address ":9001"
     volumes:
       - ./minio/data:/data
-    networks:
-      - my-network
 
-  # =========================================
-  # 4. RocketMQ NameServer (大脑)
-  # =========================================
   rmqnamesrv:
     image: apache/rocketmq:4.9.4
-    container_name: rmqnamesrv
     ports:
-      - 9876:9876
+      - "9876:9876"
     environment:
-      - JAVA_OPT_EXT=-server -Xms256m -Xmx256m -Xmn128m
+      JAVA_OPT_EXT: -server -Xms256m -Xmx256m -Xmn128m
     command: sh mqnamesrv
-    networks:
-      - my-network
 
-  # =========================================
-  # 5. RocketMQ Broker (干活的)
-  # =========================================
   rmqbroker:
     image: apache/rocketmq:4.9.4
-    container_name: rmqbroker
     ports:
-      - 10911:10911
-      - 10909:10909
+      - "10911:10911"
+      - "10909:10909"
     environment:
-      - NAMESRV_ADDR=rmqnamesrv:9876
-      - BROKER_ID=0
-      - BROKER_ROLE=ASYNC_MASTER
-      - JAVA_OPT_EXT=-server -Xms256m -Xmx256m -Xmn128m
+      NAMESRV_ADDR: rmqnamesrv:9876
+      BROKER_ID: 0
+      BROKER_ROLE: ASYNC_MASTER
+      JAVA_OPT_EXT: -server -Xms256m -Xmx256m -Xmn128m
     volumes:
       - ./rocketmq/broker.conf:/opt/rocketmq-4.9.4/conf/broker.conf
     command: sh mqbroker -n rmqnamesrv:9876 -c /opt/rocketmq-4.9.4/conf/broker.conf
     depends_on:
       - rmqnamesrv
-    networks:
-      - my-network
 
-  # =========================================
-  # 6. RocketMQ Dashboard (可视化控制台)
-  # =========================================
   rmqdashboard:
     image: apacherocketmq/rocketmq-dashboard:latest
-    container_name: rmqdashboard
     ports:
-      - 8180:8082
+      - "8180:8082"
     environment:
-      - JAVA_OPTS=-Drocketmq.namesrv.addr=rmqnamesrv:9876
+      JAVA_OPTS: -Drocketmq.namesrv.addr=rmqnamesrv:9876
     depends_on:
       - rmqnamesrv
-    networks:
-      - my-network
-
-networks:
-  my-network:
-    driver: bridge

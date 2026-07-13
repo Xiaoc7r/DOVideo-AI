@@ -21,11 +21,11 @@ import java.util.concurrent.TimeUnit;
 public class AliyunAsrUtils {
 
     private static final Logger log = LoggerFactory.getLogger(AliyunAsrUtils.class);
-    private static final String TRANSCRIPTION_URL = "https://api.siliconflow.cn/v1/audio/transcriptions";
-    private static final String MODEL = "TeleAI/TeleSpeechASR";
     private static final int MAX_ATTEMPTS = 3;
 
     private final String apiKey;
+    private final String transcriptionUrl;
+    private final String model;
     private final OkHttpClient client = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(3, TimeUnit.MINUTES)
@@ -33,8 +33,12 @@ public class AliyunAsrUtils {
             .retryOnConnectionFailure(true)
             .build();
 
-    public AliyunAsrUtils(@Value("${ai.deepseek.api-key}") String apiKey) {
+    public AliyunAsrUtils(@Value("${ai.deepseek.api-key}") String apiKey,
+                          @Value("${ai.asr.url}") String transcriptionUrl,
+                          @Value("${ai.asr.model}") String model) {
         this.apiKey = apiKey;
+        this.transcriptionUrl = transcriptionUrl;
+        this.model = model;
     }
 
     public String audioToText(String filePath) {
@@ -61,10 +65,10 @@ public class AliyunAsrUtils {
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("file", file.getName(),
                         RequestBody.create(file, MediaType.parse("application/octet-stream")))
-                .addFormDataPart("model", MODEL)
+                .addFormDataPart("model", model)
                 .build();
         Request request = new Request.Builder()
-                .url(TRANSCRIPTION_URL)
+                .url(transcriptionUrl)
                 .addHeader("Authorization", "Bearer " + apiKey)
                 .post(requestBody)
                 .build();

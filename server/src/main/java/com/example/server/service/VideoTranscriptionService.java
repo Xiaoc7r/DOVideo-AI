@@ -1,6 +1,5 @@
-package com.example.server.strategy.impl;
+package com.example.server.service;
 
-import com.example.server.strategy.AiAnalysisStrategy;
 import com.example.server.utils.AliyunAsrUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,18 +10,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
-@Component("defaultAiStrategy")
-public class AliyunDeepSeekStrategy implements AiAnalysisStrategy {
+@Component
+public class VideoTranscriptionService {
 
-    private static final Logger log = LoggerFactory.getLogger(AliyunDeepSeekStrategy.class);
+    private static final Logger log = LoggerFactory.getLogger(VideoTranscriptionService.class);
 
     private final AliyunAsrUtils aliyunAsrUtils;
 
-    public AliyunDeepSeekStrategy(AliyunAsrUtils aliyunAsrUtils) {
+    public VideoTranscriptionService(AliyunAsrUtils aliyunAsrUtils) {
         this.aliyunAsrUtils = aliyunAsrUtils;
     }
 
-    @Override
     public String transcribe(String videoPath) {
         return processVideoToText(videoPath);
     }

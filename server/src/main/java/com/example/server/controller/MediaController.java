@@ -1,6 +1,5 @@
 package com.example.server.controller;
 
-import com.example.server.entity.MediaFile;
 import com.example.server.dto.MediaSummary;
 import com.example.server.service.AuthService;
 import com.example.server.service.MediaService;
@@ -103,10 +102,13 @@ public class MediaController {
             return ResponseEntity.badRequest().body("Upload failed: file is empty");
         }
         try {
+            String filename = mediaService.normalizeVideoFilename(file.getOriginalFilename());
             String md5 = mediaService.calculateMd5(file);
             String fileUrl = minioUtils.uploadFile(file);
-            mediaService.saveUploadedMedia(file.getOriginalFilename(), fileUrl, userId, md5);
+            mediaService.saveUploadedMedia(filename, fileUrl, userId, md5);
             return ResponseEntity.ok("Upload success");
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
             log.error("media_upload_failed userId={} filename={}", userId, file.getOriginalFilename(), e);
             return ResponseEntity.internalServerError().body("Upload failed");
