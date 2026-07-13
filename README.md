@@ -1,10 +1,13 @@
 <div align="center">
-  <h2>DoVideoAI</h2>
   <p>
     <a href="https://github.com/Xiaoc7r/DOVideo-AI/stargazers"><img src="https://img.shields.io/github/stars/Xiaoc7r/DOVideo-AI?style=flat-square" alt="GitHub Stars"></a>
     <img src="https://img.shields.io/badge/Java-21-E76F00?style=flat-square" alt="Java 21">
     <img src="https://img.shields.io/badge/Spring%20Boot-3.5.9-6DB33F?style=flat-square" alt="Spring Boot 3.5.9">
     <img src="https://img.shields.io/badge/Vue-3-42B883?style=flat-square" alt="Vue 3">
+    <img src="https://img.shields.io/badge/MySQL-8-4479A1?style=flat-square" alt="MySQL 8">
+    <img src="https://img.shields.io/badge/Redis-7-DC382D?style=flat-square" alt="Redis 7">
+    <img src="https://img.shields.io/badge/RocketMQ-4.9-D77310?style=flat-square" alt="RocketMQ 4.9">
+    <img src="https://img.shields.io/badge/LangChain4j-Agent-20232A?style=flat-square" alt="LangChain4j">
     <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License"></a>
   </p>
 </div>
@@ -16,7 +19,11 @@
 DoVideoAI 将长视频转化为可检索、可追溯、可继续追问的结构化知识。
 
 系统会融合 ASR 与关键帧 OCR 构建多模态 `VideoContext`，再由 Planner、Executor 与 Critic 围绕用户目标完成分析和证据校验。
+
 </div>
+
+
+
 
 ## 项目预览
 
