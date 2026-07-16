@@ -7,7 +7,6 @@
     <img src="https://img.shields.io/badge/MySQL-8-4479A1?style=flat-square" alt="MySQL 8">
     <img src="https://img.shields.io/badge/Redis-7-DC382D?style=flat-square" alt="Redis 7">
     <img src="https://img.shields.io/badge/RocketMQ-4.9-D77310?style=flat-square" alt="RocketMQ 4.9">
-    <img src="https://img.shields.io/badge/MinIO-Object%20Storage-C72E49?style=flat-square" alt="MinIO">
     <img src="https://img.shields.io/badge/LangChain4j-Agent-20232A?style=flat-square" alt="LangChain4j">
     <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License"></a>
   </p>
