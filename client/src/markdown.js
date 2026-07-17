@@ -12,6 +12,7 @@ export function renderMarkdown(markdown) {
   let cleanText = markdown.replace(/<think>[\s\S]*?<\/think>/gi, '')
   if (cleanText.includes('</think>')) cleanText = cleanText.split('</think>').pop()
   if (!cleanText.trim()) cleanText = markdown
+  cleanText = linkVideoTimestamps(cleanText)
 
   const template = document.createElement('template')
   template.innerHTML = marked.parse(cleanText)
@@ -35,5 +36,15 @@ function sanitizeNode(node) {
   const href = node.getAttribute('href') || ''
   if (!/^(https?:|mailto:|\/|#)/i.test(href)) node.removeAttribute('href')
   node.setAttribute('rel', 'noopener noreferrer')
-  node.setAttribute('target', '_blank')
+  if (!href.startsWith('#video-t=')) node.setAttribute('target', '_blank')
+}
+
+function linkVideoTimestamps(markdown) {
+  return markdown.replace(/\[((?:\d{1,2}:)?\d{1,2}:\d{2})\](?!\()/g, (match, timestamp) => {
+    const parts = timestamp.split(':').map(Number)
+    const seconds = parts.length === 3
+      ? parts[0] * 3600 + parts[1] * 60 + parts[2]
+      : parts[0] * 60 + parts[1]
+    return `[${timestamp}](#video-t=${seconds})`
+  })
 }

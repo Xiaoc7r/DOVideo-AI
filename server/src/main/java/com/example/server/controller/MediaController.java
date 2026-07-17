@@ -1,6 +1,7 @@
 package com.example.server.controller;
 
 import com.example.server.dto.MediaSummary;
+import com.example.server.entity.MediaFile;
 import com.example.server.service.AuthService;
 import com.example.server.service.ChunkUploadService;
 import com.example.server.service.MediaIngestService;
@@ -127,6 +128,13 @@ public class MediaController {
     @GetMapping("/list")
     public List<MediaSummary> getList(@RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
         return mediaService.listByUser(userId).stream().map(MediaSummary::from).toList();
+    }
+
+    @GetMapping("/playback")
+    public ResponseEntity<String> playback(@RequestParam Long id,
+                                           @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
+        MediaFile mediaFile = mediaService.requireOwnedMedia(id, userId);
+        return ResponseEntity.ok(mediaService.readableSource(mediaFile.getFilePath()));
     }
 
     @DeleteMapping("/delete")

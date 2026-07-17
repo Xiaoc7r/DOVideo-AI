@@ -21,14 +21,16 @@
 
           <div v-else class="user-profile">
             <span class="user-name">:: {{ currentUser.nickname }} ::</span>
-            <button class="logout-btn" @click="logout" title="退出登录">
+            <button class="logout-btn" @click="logout" title="退出登录" aria-label="退出登录">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
             </button>
           </div>
 
           <div class="status-pill" :class="{ 'is-active': uploading }">
             <div class="status-dot"></div>
-            <span class="status-text">{{ uploading ? '数据传输中...' : '系统就绪' }}</span>
+            <span class="status-text">
+              {{ uploading && uploadProgress.percent !== null ? `上传 ${uploadProgress.percent}%` : uploading ? '处理中' : '系统就绪' }}
+            </span>
           </div>
         </div>
       </div>
@@ -82,9 +84,10 @@
                         v-model="videoUrl"
                         type="text"
                         placeholder="粘贴视频链接..."
+                        aria-label="视频链接"
                         @keyup.enter="handleUrlUpload"
                     />
-                    <button class="url-go-btn" @click="handleUrlUpload">
+                    <button class="url-go-btn" @click="handleUrlUpload" aria-label="解析视频链接">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
                     </button>
                   </div>
@@ -95,7 +98,19 @@
 
             <div class="magnet-content busy" v-else>
               <div class="quantum-loader"></div>
-              <span class="busy-text">正在建立通道并解析资源...</span>
+              <span class="busy-text">{{ uploadProgress.label }}</span>
+              <span v-if="uploadProgress.filename" class="busy-file">{{ uploadProgress.filename }}</span>
+              <div
+                  v-if="uploadProgress.percent !== null"
+                  class="upload-progress"
+                  role="progressbar"
+                  aria-label="视频上传进度"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  :aria-valuenow="uploadProgress.percent"
+              >
+                <span :style="{ width: `${uploadProgress.percent}%` }"></span>
+              </div>
             </div>
 
             <div class="border-glow"></div>
@@ -109,14 +124,22 @@
       </section>
 
       <section v-if="list.length > 0" class="workspace-section">
-        <div class="section-header"><h3>工作台</h3><div class="count-chip">{{ list.length }} TASKS</div></div>
+        <div class="section-header">
+          <div class="library-title">
+            <h3>视频资料库</h3>
+            <div class="count-chip">{{ list.length }} 个视频</div>
+          </div>
+          <label class="library-search">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input v-model="searchQuery" type="search" placeholder="搜索视频名称" aria-label="搜索视频名称" />
+          </label>
+        </div>
         <div class="card-grid">
-          <div v-for="item in list" :key="item.id" class="project-card">
+          <div v-for="item in visibleList" :key="item.id" class="project-card">
 
-            <button class="delete-btn" @click.stop="deleteItem(item)" title="删除此项">
+            <button class="delete-btn" @click.stop="deleteItem(item)" title="删除视频" :aria-label="`删除 ${item.filename}`">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
+                <polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M8 6V4h8v2"></path>
               </svg>
             </button>
             <div class="card-meta">
@@ -169,10 +192,21 @@
             </div>
           </div>
         </div>
+        <div v-if="visibleList.length === 0" class="library-empty">
+          <p>没有找到“{{ searchQuery }}”</p>
+          <button type="button" @click="searchQuery = ''">清除搜索</button>
+        </div>
       </section>
 
       <div class="sidebar-backdrop" v-if="sidebar.visible" @click="closeSidebar"></div>
-      <div class="sidebar-panel" :class="{ 'is-open': sidebar.visible }">
+      <div
+          class="sidebar-panel"
+          :class="{ 'is-open': sidebar.visible }"
+          :inert="!sidebar.visible"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="sidebar.title || '任务详情'"
+      >
         <div class="sidebar-header">
           <div class="sidebar-title">
             <span class="icon" v-if="sidebar.type === 'ai'">
@@ -183,16 +217,38 @@
             </span>
             {{ sidebar.title }}
           </div>
-          <button class="close-btn" @click="closeSidebar">×</button>
+          <button class="close-btn" @click="closeSidebar" aria-label="关闭分析面板">×</button>
         </div>
         <div class="sidebar-body">
+          <div v-if="sidebar.type === 'ai'" class="video-evidence">
+            <video
+                v-if="sidebar.playbackUrl"
+                ref="videoPlayer"
+                :src="sidebar.playbackUrl"
+                controls
+                preload="metadata"
+            ></video>
+            <div v-else-if="sidebar.playbackLoading" class="video-evidence-loading">正在载入原视频...</div>
+            <p v-if="sidebar.playbackUrl">点击分析结果中的时间戳，可跳转到对应画面</p>
+          </div>
           <div v-if="sidebar.type === 'ai' && sidebar.mode === 'compose'" class="agent-composer">
             <p class="agent-caption">告诉 Agent 你希望从视频中得到什么产物</p>
+            <p v-if="sidebar.error" class="inline-error" role="alert">{{ sidebar.error }}</p>
             <textarea v-model="sidebar.goal" maxlength="500" placeholder="例如：梳理核心观点，给出带时间戳的证据和可执行建议"></textarea>
             <div class="goal-presets">
-              <button v-for="preset in goalPresets" :key="preset" @click="sidebar.goal = preset">{{ preset }}</button>
+              <button
+                  v-for="preset in goalPresets"
+                  :key="preset.title"
+                  :class="{ active: sidebar.goal === preset.prompt }"
+                  @click="sidebar.goal = preset.prompt"
+              >
+                <strong>{{ preset.title }}</strong>
+                <span>{{ preset.description }}</span>
+              </button>
             </div>
-            <button class="agent-run-btn" :disabled="!sidebar.goal.trim()" @click="submitAgent">开始分析</button>
+            <button class="agent-run-btn" :disabled="!sidebar.goal.trim()" @click="submitAgent">
+              {{ sidebar.error ? '重新分析' : '开始分析' }}
+            </button>
           </div>
 
           <div v-else-if="sidebar.loading" class="agent-running">
@@ -203,14 +259,21 @@
             </div>
             <div v-if="traceStages.length" class="agent-meta-block">
               <span class="meta-label">已完成阶段</span>
-              <div class="stage-list"><span v-for="stage in traceStages" :key="stage[0]">{{ stage[0] }} · {{ stage[1] }}ms</span></div>
+              <div class="stage-list"><span v-for="stage in traceStages" :key="stage[0]">{{ stage[0] }} · {{ stage[1] }}</span></div>
             </div>
           </div>
 
           <div v-else>
             <div v-if="sidebar.type === 'ai'">
-              <div class="markdown-content" v-html="renderedMarkdown"></div>
-              <div v-if="sidebar.plan?.tasks?.length || traceStages.length" class="agent-inspector">
+              <div class="result-actions">
+                <button type="button" @click="startNewAnalysis">更换产物</button>
+                <button type="button" @click="copyResult">复制结果</button>
+                <button type="button" @click="downloadResult">导出 Markdown</button>
+              </div>
+              <div class="markdown-content" v-html="renderedMarkdown" @click="seekEvidence"></div>
+              <details v-if="sidebar.plan?.tasks?.length || traceStages.length" class="agent-inspector">
+                <summary>分析详情</summary>
+                <div class="agent-inspector-content">
                 <div v-if="sidebar.plan?.tasks?.length" class="agent-meta-block">
                   <span class="meta-label">Planner 任务</span>
                   <div v-if="sidebar.editingPlan" class="plan-editor">
@@ -218,7 +281,7 @@
                       <input v-model="sidebar.planDraft[index]" maxlength="500" :aria-label="`任务 ${index + 1}`" />
                       <button type="button" title="删除任务" @click="removePlanTask(index)">×</button>
                     </div>
-                    <button v-if="sidebar.planDraft.length < 8" type="button" @click="addPlanTask">添加任务</button>
+                    <button v-if="sidebar.planDraft.length < 5" type="button" @click="addPlanTask">添加任务</button>
                     <div class="plan-editor-actions">
                       <button type="button" @click="cancelPlanEdit">取消</button>
                       <button type="button" :disabled="sidebar.rerunLoading" @click="rerunWithPlan">
@@ -233,14 +296,15 @@
                 </div>
                 <div v-if="traceStages.length" class="agent-meta-block">
                   <span class="meta-label">执行轨迹</span>
-                  <div class="stage-list"><span v-for="stage in traceStages" :key="stage[0]">{{ stage[0] }} · {{ stage[1] }}ms</span></div>
+                  <div class="stage-list"><span v-for="stage in traceStages" :key="stage[0]">{{ stage[0] }} · {{ stage[1] }}</span></div>
                 </div>
                 <div v-if="sidebar.evaluation && Object.keys(sidebar.evaluation).length" class="quality-row">
                   <span>结构完整 {{ sidebar.evaluation.structuredValid ? '通过' : '待完善' }}</span>
                   <span>证据支持 {{ formatPercent(sidebar.evaluation.evidenceSupportRate) }}</span>
                   <span>Critic {{ sidebar.evaluation.criticPassed ? '通过' : '达到轮次上限' }}</span>
                 </div>
-              </div>
+                </div>
+              </details>
               <div class="follow-up-box">
                 <textarea v-model="sidebar.followUp" maxlength="500" placeholder="基于视频继续追问..."></textarea>
                 <button :disabled="sidebar.followUpLoading || !sidebar.followUp.trim()" @click="submitFollowUp">
@@ -249,8 +313,8 @@
               </div>
               <div class="feedback-row">
                 <span>这个结果有帮助吗？</span>
-                <button :class="{ active: sidebar.feedback === 1 }" @click="sendFeedback(1)" title="有帮助">赞</button>
-                <button :class="{ active: sidebar.feedback === -1 }" @click="sendFeedback(-1)" title="需改进">踩</button>
+                <button :class="{ active: sidebar.feedback === 1 }" :aria-pressed="sidebar.feedback === 1" @click="sendFeedback(1)" title="有帮助">赞</button>
+                <button :class="{ active: sidebar.feedback === -1 }" :aria-pressed="sidebar.feedback === -1" @click="sendFeedback(-1)" title="需改进">踩</button>
               </div>
             </div>
             <div v-else class="text-content"><pre>{{ sidebar.content }}</pre></div>
@@ -258,37 +322,37 @@
         </div>
       </div>
 
-      <div v-if="showAuthModal" class="auth-backdrop">
-        <div class="auth-panel">
+      <div v-if="showAuthModal" class="auth-backdrop" @click.self="closeAuthModal">
+        <div class="auth-panel" role="dialog" aria-modal="true" aria-labelledby="auth-title">
           <div class="auth-header">
-            <h2 class="auth-title">{{ authMode === 'login' ? '用户登录' : '新用户注册' }}</h2>
-            <button class="close-btn" @click="closeAuthModal">×</button>
+            <h2 id="auth-title" class="auth-title">{{ authMode === 'login' ? '用户登录' : '新用户注册' }}</h2>
+            <button class="close-btn" @click="closeAuthModal" aria-label="关闭登录窗口">×</button>
           </div>
-          <div class="auth-body">
+          <form class="auth-body" @submit.prevent="handleAuth">
             <div class="input-group">
-              <label>USERNAME</label>
-              <input v-model="authForm.username" type="text" placeholder="输入账号" />
+              <label for="auth-username">用户名</label>
+              <input id="auth-username" v-model="authForm.username" type="text" placeholder="输入账号" autocomplete="username" autofocus />
             </div>
             <div class="input-group">
-              <label>PASSWORD</label>
-              <input v-model="authForm.password" type="password" placeholder="输入密码" />
+              <label for="auth-password">密码</label>
+              <input id="auth-password" v-model="authForm.password" type="password" placeholder="输入密码" :autocomplete="authMode === 'login' ? 'current-password' : 'new-password'" />
             </div>
             <div class="input-group" v-if="authMode === 'register'">
-              <label>NICKNAME (昵称)</label>
-              <input v-model="authForm.nickname" type="text" placeholder="设置一个好听的名字" />
+              <label for="auth-nickname">昵称</label>
+              <input id="auth-nickname" v-model="authForm.nickname" type="text" placeholder="设置一个好听的名字" autocomplete="nickname" />
             </div>
             <div class="auth-action">
-              <button class="cyber-btn" @click="handleAuth" :disabled="authLoading">
+              <button type="submit" class="cyber-btn" :disabled="authLoading">
                 <span v-if="!authLoading">{{ authMode === 'login' ? '立即登录' : '提交注册' }}</span>
                 <span v-else>请求处理中...</span>
               </button>
             </div>
             <div class="auth-toggle">
               <span class="toggle-text">{{ authMode === 'login' ? '没有账号?' : '已有账号?' }}</span>
-              <button class="toggle-link" @click="switchAuthMode">{{ authMode === 'login' ? '去注册' : '去登录' }}</button>
+              <button type="button" class="toggle-link" @click="switchAuthMode">{{ authMode === 'login' ? '去注册' : '去登录' }}</button>
             </div>
             <p v-if="authMessage" class="auth-msg" :class="{'error': authError}">{{ authMessage }}</p>
-          </div>
+          </form>
         </div>
       </div>
     </main>
@@ -296,7 +360,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { apiRequest, clearAuthToken, hasAuthToken, setAuthToken } from './api'
 import { uploadVideoInChunks } from './chunkUpload'
 import { DEMO_ITEM } from './demoData'
@@ -310,7 +374,15 @@ const videoUrl = ref('')
 const message = ref('')
 const messageIsError = ref(false)
 const uploading = ref(false)
+const uploadProgress = ref({ label: '准备上传', filename: '', percent: null })
 const list = ref([])
+const searchQuery = ref('')
+const videoPlayer = ref(null)
+const visibleList = computed(() => {
+  const query = searchQuery.value.trim().toLocaleLowerCase()
+  if (!query) return list.value
+  return list.value.filter(item => item.filename?.toLocaleLowerCase().includes(query))
+})
 const isDragOver = ref(false)
 const currentUser = ref(null)
 const showAuthModal = ref(false)
@@ -340,6 +412,7 @@ const handleFileChange = async (e) => {
   file.value = selectedFile
   videoUrl.value = ''
   await uploadFile()
+  e.target.value = ''
 }
 
 const handleDrop = async (e) => {
@@ -368,21 +441,32 @@ const uploadFile = async () => {
     return
   }
   uploading.value = true
+  uploadProgress.value = { label: '准备分片上传', filename: file.value.name, percent: 0 }
 
   try {
     await uploadVideoInChunks(file.value, progress => {
+      const percent = progress.phase === 'merging'
+        ? 100
+        : Math.round(progress.completedChunks / progress.totalChunks * 100)
+      uploadProgress.value = {
+        label: progress.phase === 'merging' ? '正在合并视频' : '正在安全上传',
+        filename: file.value.name,
+        percent
+      }
       messageIsError.value = false
       message.value = progress.phase === 'merging'
         ? '分片上传完成，正在合并文件...'
         : `正在上传分片 ${progress.completedChunks}/${progress.totalChunks}...`
     })
     showMsg('✅ 本地上传完成')
-    fetchList()
+    await fetchList()
+    if (list.value[0]) openAgent(list.value[0])
   } catch (error) {
     console.error(error)
     showMsg('❌ 上传失败: ' + error.message, true)
   } finally {
     uploading.value = false
+    file.value = null
   }
 }
 
@@ -412,6 +496,7 @@ const handleUrlUpload = async () => {
   }
 
   uploading.value = true
+  uploadProgress.value = { label: '正在解析视频链接', filename: parsedUrl.hostname, percent: null }
   messageIsError.value = false
   message.value = '正在解析链接并极速下载 (低码率模式)...'
 
@@ -428,7 +513,8 @@ const handleUrlUpload = async () => {
 
     showMsg('✅ 链接资源已入库')
     videoUrl.value = ''
-    fetchList()
+    await fetchList()
+    if (list.value[0]) openAgent(list.value[0])
   } catch (error) {
     console.error(error)
     let errMsg = error.message
@@ -451,7 +537,7 @@ const showMsg = (msg, isError = false) => {
 }
 
 const fetchList = async () => {
-  if (DEMO_MODE) return
+  if (DEMO_MODE) return list.value
   try {
     let url = '/media/list'
     if (currentUser.value) {
@@ -468,6 +554,7 @@ const fetchList = async () => {
   } catch (error) {
     console.error(error)
   }
+  return list.value
 }
 
 const {
@@ -479,6 +566,7 @@ const {
   closeSidebar,
   openAgent,
   submitAgent,
+  startNewAnalysis,
   showDemoResult,
   startPlanEdit,
   cancelPlanEdit,
@@ -495,6 +583,35 @@ const {
   refreshMediaList: fetchList,
   findMediaItem: id => list.value.find(item => item.id === id)
 })
+
+const seekEvidence = event => {
+  const link = event.target.closest('a[href^="#video-t="]')
+  if (!link || !videoPlayer.value) return
+  event.preventDefault()
+  const seconds = Number(link.getAttribute('href').split('=')[1])
+  if (!Number.isFinite(seconds)) return
+  videoPlayer.value.currentTime = seconds
+  videoPlayer.value.play().catch(() => {})
+}
+
+const copyResult = async () => {
+  try {
+    await navigator.clipboard.writeText(sidebar.value.content)
+    showMsg('分析结果已复制')
+  } catch {
+    showMsg('复制失败，请手动选择内容', true)
+  }
+}
+
+const downloadResult = () => {
+  const blob = new Blob([sidebar.value.content], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${sidebar.value.title.replace(/^Video Agent · /, '').replace(/\.[^/.]+$/, '') || 'analysis'}.md`
+  link.click()
+  URL.revokeObjectURL(url)
+}
 
 const deleteItem = async (item) => {
   if (DEMO_MODE) {
@@ -545,7 +662,7 @@ const downloadAudio = async (item) => {
     window.URL.revokeObjectURL(downloadUrl)
     showMsg('✅ 下载完成')
   } catch (e) {
-    alert("下载失败")
+    showMsg('音频下载失败，请稍后重试', true)
   }
 }
 
@@ -555,6 +672,13 @@ const openAuthModal = () => {
   authForm.value = { username: '', password: '', nickname: '' }
 }
 const closeAuthModal = () => { showAuthModal.value = false }
+const closeActiveOverlay = () => {
+  if (showAuthModal.value) closeAuthModal()
+  else if (sidebar.value.visible) closeSidebar()
+}
+const handleKeydown = event => {
+  if (event.key === 'Escape') closeActiveOverlay()
+}
 const switchAuthMode = () => {
   authMode.value = authMode.value === 'login' ? 'register' : 'login'
   authMessage.value = ''
@@ -624,6 +748,7 @@ const handleAuthExpired = () => {
 
 onMounted(() => {
   window.addEventListener('auth-expired', handleAuthExpired)
+  window.addEventListener('keydown', handleKeydown)
   if (DEMO_MODE) {
     currentUser.value = { id: 1, nickname: 'Agent Demo' }
     list.value = [DEMO_ITEM]
@@ -641,6 +766,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('auth-expired', handleAuthExpired)
+  window.removeEventListener('keydown', handleKeydown)
   taskStreams.stopAll()
 })
 </script>
@@ -783,6 +909,9 @@ html, body, #app {
   background: var(--bg-card); position: relative; z-index: 50;
 }
 .busy-text { margin-top: 15px; color: var(--accent-lime); font-family: monospace; animation: pulse-lime 2s infinite; }
+.busy-file { max-width: 80%; margin-top: 8px; color: var(--text-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upload-progress { width: min(320px, 72%); height: 4px; margin-top: 20px; background: var(--border-tech); overflow: hidden; }
+.upload-progress span { display: block; height: 100%; background: var(--accent-lime); transition: width 0.25s ease; }
 /* === [END] 重构结束 === */
 
 .notification-bar { margin-top: 2rem; display: inline-block; background: var(--accent-lime); color: var(--text-inverse); padding: 10px 24px; font-weight: 700; border-radius: 4px; clip-path: polygon(5% 0%, 100% 0%, 95% 100%, 0% 100%); }
@@ -793,9 +922,15 @@ html, body, #app {
 
 /* Workspace */
 .workspace-section { opacity: 0; animation: slideUpFade 0.8s 0.4s forwards; }
-.section-header { display: flex; align-items: center; gap: 12px; margin-bottom: 2rem; border-bottom: 2px solid var(--border-tech); padding-bottom: 10px; }
+.section-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 2rem; border-bottom: 2px solid var(--border-tech); padding-bottom: 12px; }
+.library-title { display: flex; align-items: center; gap: 12px; }
 .section-header h3 { font-size: 1.5rem; font-weight: 700; }
 .count-chip { background: var(--border-tech); padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; font-family: monospace; }
+.library-search { width: min(320px, 42vw); display: flex; align-items: center; gap: 9px; padding: 8px 11px; border: 1px solid var(--border-tech); background: #090a0d; color: var(--text-sub); }
+.library-search:focus-within { border-color: var(--accent-lime); color: var(--accent-lime); }
+.library-search input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--text-main); font: inherit; }
+.library-empty { padding: 52px 20px; text-align: center; color: var(--text-sub); border: 1px dashed var(--border-tech); }
+.library-empty button { margin-top: 12px; border: 0; background: transparent; color: var(--accent-lime); cursor: pointer; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
 .project-card { background: var(--bg-card); border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); border: 1px solid var(--border-tech); overflow: hidden; transition: transform 0.2s; position: relative; }
 .project-card:hover { transform: translateY(-2px); border-color: var(--accent-lime); }
@@ -820,12 +955,12 @@ html, body, #app {
 
 /* Sidebar */
 .sidebar-backdrop { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 998; }
-.sidebar-panel { position: fixed; top: 0; right: -600px; width: 550px; max-width: 90vw; height: 100%; background: var(--bg-card); border-left: 2px solid var(--accent-lime); z-index: 999; transition: right 0.4s cubic-bezier(0.19, 1, 0.22, 1); display: flex; flex-direction: column; box-shadow: -10px 0 40px rgba(0,0,0,0.8); }
+.sidebar-panel { position: fixed; top: 0; right: -920px; width: 880px; max-width: calc(100vw - 24px); height: 100%; background: var(--bg-card); border-left: 2px solid var(--accent-lime); z-index: 999; transition: right 0.4s cubic-bezier(0.19, 1, 0.22, 1); display: flex; flex-direction: column; box-shadow: -10px 0 40px rgba(0,0,0,0.8); }
 .sidebar-panel.is-open { right: 0; }
 .sidebar-header { padding: 20px 30px; border-bottom: 1px solid var(--border-tech); display: flex; justify-content: space-between; align-items: center; background: rgba(11, 12, 16, 0.9); }
 .sidebar-title { font-size: 1.4rem; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 10px; }
 .icon { color: var(--accent-lime); display: flex; align-items: center; }
-.close-btn { background: none; border: none; color: var(--text-sub); padding: 5px; cursor: pointer; transition: color 0.3s; }
+.close-btn { width: 40px; height: 40px; background: none; border: none; color: var(--text-sub); cursor: pointer; transition: color 0.3s; font-size: 1.35rem; }
 .close-btn:hover { color: var(--accent-lime); }
 .sidebar-body { flex: 1; overflow-y: auto; padding: 30px; }
 .loading-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-sub); gap: 20px; }
@@ -837,23 +972,38 @@ html, body, #app {
 .markdown-content li { margin-bottom: 8px; color: #d4d4d8; }
 .markdown-content strong { color: var(--accent-lime); font-weight: 700; }
 .markdown-content p { margin-bottom: 1em; }
+.markdown-content a[href^="#video-t="] { display: inline-block; padding: 1px 6px; border: 1px solid rgba(197, 249, 70, 0.45); color: var(--accent-lime); text-decoration: none; font-family: monospace; }
+.markdown-content a[href^="#video-t="]:hover { background: var(--accent-lime); color: var(--text-inverse); }
+.result-actions { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 18px; }
+.result-actions button { border: 1px solid var(--border-tech); background: transparent; color: var(--text-sub); padding: 8px 10px; cursor: pointer; }
+.result-actions button:hover { border-color: var(--accent-lime); color: var(--accent-lime); }
 
 /* Agent workspace */
+.video-evidence { margin: -30px -30px 28px; background: #050607; border-bottom: 1px solid var(--border-tech); }
+.video-evidence video { display: block; width: 100%; max-height: 420px; aspect-ratio: 16 / 9; background: #000; object-fit: contain; }
+.video-evidence p, .video-evidence-loading { padding: 10px 30px; color: var(--text-sub); font-size: 0.8rem; }
+.video-evidence-loading { min-height: 110px; display: grid; place-items: center; }
 .agent-composer { display: flex; flex-direction: column; gap: 18px; }
 .agent-caption { color: var(--text-sub); line-height: 1.7; }
+.inline-error { padding: 11px 12px; border-left: 2px solid #ff4757; background: rgba(255, 71, 87, 0.08); color: #ff9aa4; line-height: 1.5; }
 .agent-composer textarea, .follow-up-box textarea {
   width: 100%; min-height: 130px; resize: vertical; background: #090a0d; color: var(--text-main);
   border: 1px solid var(--border-tech); border-radius: 6px; padding: 14px; line-height: 1.6; outline: none;
 }
 .agent-composer textarea:focus, .follow-up-box textarea:focus { border-color: var(--accent-lime); }
-.goal-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.goal-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .goal-presets button, .feedback-row button {
   border: 1px solid var(--border-tech); border-radius: 4px; background: transparent; color: var(--text-sub);
   padding: 7px 10px; cursor: pointer;
 }
-.goal-presets button:hover, .feedback-row button:hover, .feedback-row button.active {
+.goal-presets button { min-height: 82px; padding: 12px; text-align: left; }
+.goal-presets strong, .goal-presets span { display: block; }
+.goal-presets strong { margin-bottom: 6px; color: var(--text-main); }
+.goal-presets span { font-size: 0.76rem; line-height: 1.45; }
+.goal-presets button:hover, .goal-presets button.active, .feedback-row button:hover, .feedback-row button.active {
   color: var(--accent-lime); border-color: var(--accent-lime); background: rgba(197, 249, 70, 0.08);
 }
+.goal-presets button:hover strong, .goal-presets button.active strong { color: var(--accent-lime); }
 .agent-run-btn {
   border: 0; border-radius: 4px; padding: 13px 18px; background: var(--accent-lime); color: var(--text-inverse);
   font-weight: 700; cursor: pointer;
@@ -861,7 +1011,10 @@ html, body, #app {
 .agent-run-btn:disabled, .follow-up-box button:disabled { opacity: 0.4; cursor: not-allowed; }
 .agent-running { display: flex; flex-direction: column; gap: 20px; }
 .agent-running .loading-state { min-height: 210px; height: auto; }
-.agent-inspector { margin-top: 28px; border-top: 1px solid var(--border-tech); padding-top: 20px; }
+.agent-inspector { margin-top: 28px; border-top: 1px solid var(--border-tech); padding-top: 16px; }
+.agent-inspector summary { color: var(--text-sub); cursor: pointer; font-weight: 600; padding: 8px 0; }
+.agent-inspector summary:hover { color: var(--accent-lime); }
+.agent-inspector-content { padding-top: 14px; }
 .agent-meta-block { margin-bottom: 18px; padding: 14px; background: #0c0e12; border-left: 2px solid var(--accent-lime); }
 .meta-label { display: block; color: var(--accent-lime); font-size: 0.78rem; font-weight: 700; margin-bottom: 10px; }
 .agent-meta-block ol { padding-left: 20px; color: #c9cbd0; }
@@ -908,10 +1061,10 @@ html, body, #app {
 /* 删除按钮 */
 .delete-btn {
   position: absolute; top: 10px; right: 10px; background: transparent; border: none;
-  color: #71757a; cursor: pointer; opacity: 0; transition: all 0.3s ease; z-index: 10; padding: 5px;
+  width: 36px; height: 36px; color: #71757a; cursor: pointer; opacity: 0; transition: color 0.2s ease, opacity 0.2s ease; z-index: 10;
 }
-.project-card:hover .delete-btn { opacity: 1; }
-.delete-btn:hover { color: #ff4757; transform: scale(1.2) rotate(90deg); }
+.project-card:hover .delete-btn, .delete-btn:focus-visible { opacity: 1; }
+.delete-btn:hover { color: #ff4757; }
 
 @media (max-width: 720px) {
   .navbar { padding: 0.8rem 0; }
@@ -930,14 +1083,27 @@ html, body, #app {
   .pane-content, .skew-pane:hover .pane-content { transform: none; }
   .split-gap { display: none; }
   .card-grid { grid-template-columns: 1fr; }
+  .section-header { align-items: stretch; flex-direction: column; }
+  .library-search { width: 100%; }
   .action-dock { grid-template-columns: 1fr; }
   .filename-mask { max-width: 55vw; }
   .sidebar-panel { width: 100%; max-width: 100vw; right: -100vw; }
   .sidebar-header { padding: 16px 18px; }
   .sidebar-title { font-size: 1rem; max-width: calc(100vw - 70px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sidebar-body { padding: 20px 16px; }
+  .video-evidence { margin: -20px -16px 22px; }
+  .video-evidence p, .video-evidence-loading { padding-left: 16px; padding-right: 16px; }
+  .goal-presets { grid-template-columns: 1fr; }
+  .goal-presets button { min-height: 68px; }
+  .result-actions { justify-content: stretch; }
+  .result-actions button { flex: 1; padding: 9px 4px; font-size: 0.76rem; }
   .follow-up-box { grid-template-columns: 1fr; }
   .follow-up-box button { min-height: 44px; }
+  .delete-btn { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }

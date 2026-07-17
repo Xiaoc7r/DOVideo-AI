@@ -2,9 +2,12 @@ import { apiRequest } from './api'
 
 const CHUNK_SIZE = 5 * 1024 * 1024
 const UPLOAD_CONCURRENCY = 3
+const MAX_TOTAL_CHUNKS = 410
 
 export async function uploadVideoInChunks(file, onProgress = () => {}) {
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+  if (!totalChunks) throw new Error('视频文件为空')
+  if (totalChunks > MAX_TOTAL_CHUNKS) throw new Error('视频大小不能超过 2GB')
   const storageKey = `upload:${file.name}:${file.size}:${file.lastModified}`
   let uploadId = localStorage.getItem(storageKey)
   let uploadedChunks = new Set()
@@ -29,6 +32,7 @@ export async function uploadVideoInChunks(file, onProgress = () => {}) {
   let cursor = 0
   let completedChunks = uploadedChunks.size
   let uploadError = null
+  onProgress({ phase: 'uploading', completedChunks, totalChunks })
 
   const worker = async () => {
     while (!uploadError && cursor < pendingChunks.length) {

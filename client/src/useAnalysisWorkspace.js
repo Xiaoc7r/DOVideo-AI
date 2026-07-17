@@ -4,7 +4,30 @@ import { DEMO_EVALUATION, DEMO_ITEM, DEMO_PLAN, DEMO_RESULT, DEMO_TRACE } from '
 import { renderMarkdown } from './markdown'
 
 const DEFAULT_GOAL = '理解视频核心内容，提炼关键结论，并给出带时间戳的证据和可执行建议'
-const GOAL_PRESETS = ['生成学习笔记', '提炼会议结论', '梳理操作步骤']
+const GOAL_PRESETS = [
+  {
+    title: '学习笔记',
+    description: '章节、知识点与复习建议',
+    prompt: '生成结构化学习笔记，按章节提炼知识点，引用关键时间戳，并给出复习建议'
+  },
+  {
+    title: '会议纪要',
+    description: '结论、分歧与待办事项',
+    prompt: '生成会议纪要，整理核心议题、明确结论、分歧点和待办事项，并引用对应时间戳'
+  },
+  {
+    title: '操作手册',
+    description: '步骤、条件与异常处理',
+    prompt: '生成可执行操作手册，提取前置条件、操作步骤、注意事项和异常处理，并引用对应时间戳'
+  }
+]
+const STAGE_LABELS = {
+  VIDEO_CONTEXT: '解析语音与画面',
+  RETRIEVAL: '检索相关证据',
+  PLANNER: '拆解分析任务',
+  EXECUTOR: '生成结构化结果',
+  CRITIC: '核验结论与证据'
+}
 
 function createSidebarState() {
   return {
@@ -13,9 +36,12 @@ function createSidebarState() {
     mode: 'compose',
     title: '',
     content: '',
+    error: '',
     loading: false,
     mediaId: null,
     goal: DEFAULT_GOAL,
+    playbackUrl: '',
+    playbackLoading: false,
     followUp: '',
     followUpLoading: false,
     plan: null,
@@ -36,7 +62,8 @@ export function useAnalysisWorkspace({
   findMediaItem
 }) {
   const sidebar = ref(createSidebarState())
-  const traceStages = computed(() => Object.entries(sidebar.value.trace?.stageDurationMs || {}))
+  const traceStages = computed(() => Object.entries(sidebar.value.trace?.stageDurationMs || {})
+    .map(([stage, duration]) => [STAGE_LABELS[stage] || stage, formatDuration(duration)]))
   const renderedMarkdown = computed(() => renderMarkdown(sidebar.value.content))
 
   const openSidebar = (type, title) => {
@@ -48,7 +75,24 @@ export function useAnalysisWorkspace({
   }
 
   const closeSidebar = () => {
+    if (sidebar.value.type === 'ai' && sidebar.value.mediaId) {
+      saveGoalDraft(sidebar.value.mediaId, sidebar.value.goal)
+    }
     sidebar.value.visible = false
+  }
+
+  const loadPlayback = async id => {
+    sidebar.value.playbackLoading = true
+    try {
+      const response = await apiRequest(`/media/playback?id=${id}`)
+      const url = await response.text()
+      if (!response.ok) throw new Error(url || '视频加载失败')
+      if (sidebar.value.mediaId === id) sidebar.value.playbackUrl = url
+    } catch (error) {
+      console.warn('Video preview unavailable', error)
+    } finally {
+      if (sidebar.value.mediaId === id) sidebar.value.playbackLoading = false
+    }
   }
 
   const refreshAgentMeta = async (id, goal, includeEvaluation) => {
@@ -83,8 +127,10 @@ export function useAnalysisWorkspace({
       && (type !== 'ai' || sidebar.value.goal === goal)
     const finish = async (result, failed = false) => {
       if (sidebar.value.visible && isCurrentTask()) {
-        sidebar.value.content = result
+        sidebar.value.content = failed && type === 'ai' ? '' : result
         sidebar.value.loading = false
+        sidebar.value.error = failed && type === 'ai' ? result : ''
+        if (failed && type === 'ai') sidebar.value.mode = 'compose'
         if (type === 'ai' && !failed) await refreshAgentMeta(id, goal, true)
       }
       showMessage(failed ? '任务执行失败，请稍后重试' : '任务完成', failed)
@@ -152,7 +198,7 @@ export function useAnalysisWorkspace({
       if (!response.ok) throw new Error(await response.text())
       startTaskStream(id, 'text')
     } catch (error) {
-      sidebar.value.content = `Error: ${error.message || error}`
+      sidebar.value.content = error.message || '文字提取失败，请稍后重试'
       sidebar.value.loading = false
     }
   }
@@ -171,26 +217,62 @@ export function useAnalysisWorkspace({
       const params = new URLSearchParams({ id: String(id), goal })
       const response = await apiRequest(`/analysis/ai?${params}`, { method: 'POST' })
       const message = await response.text()
+      if (response.status === 409) {
+        startTaskStream(id, 'ai', goal)
+        refreshAgentMeta(id, goal, false)
+        return
+      }
       if (!response.ok) {
         showMessage(message, true)
         sidebar.value.loading = false
-        sidebar.value.content = message
+        sidebar.value.mode = 'compose'
+        sidebar.value.error = message
         return
       }
       startTaskStream(id, 'ai', goal)
       refreshAgentMeta(id, goal, false)
     } catch (error) {
-      sidebar.value.content = `Error: ${error.message || error}`
+      sidebar.value.mode = 'compose'
+      sidebar.value.error = error.message || String(error)
       sidebar.value.loading = false
     }
   }
 
-  const openAgent = item => {
+  const openAgent = async item => {
+    const goal = loadGoalDraft(item.id)
     sidebar.value = {
       ...createSidebarState(),
       visible: true,
       title: `Video Agent · ${item.filename}`,
-      mediaId: item.id
+      mediaId: item.id,
+      goal
+    }
+    if (demoMode) return
+
+    loadPlayback(item.id)
+    try {
+      const params = new URLSearchParams({ id: String(item.id), goal })
+      const response = await apiRequest(`/analysis/analysis-status?${params}`)
+      if (!response.ok) return
+      const status = await response.json()
+      if (sidebar.value.mediaId !== item.id || sidebar.value.goal !== goal) return
+
+      if (status.state === 'COMPLETED') {
+        sidebar.value.mode = 'result'
+        sidebar.value.content = status.result || ''
+        sidebar.value.loading = false
+        await refreshAgentMeta(item.id, goal, true)
+      } else if (status.state === 'QUEUED' || status.state === 'PROCESSING') {
+        sidebar.value.mode = 'result'
+        sidebar.value.loading = true
+        sidebar.value.content = status.message || '正在恢复分析任务...'
+        startTaskStream(item.id, 'ai', goal)
+        await refreshAgentMeta(item.id, goal, false)
+      } else if (status.state === 'FAILED') {
+        sidebar.value.error = status.message || '上次分析未完成，可以重新提交'
+      }
+    } catch (error) {
+      console.warn('Previous analysis unavailable', error)
     }
   }
 
@@ -206,6 +288,8 @@ export function useAnalysisWorkspace({
   const submitAgent = () => {
     const goal = sidebar.value.goal.trim()
     if (!goal) return
+    sidebar.value.error = ''
+    saveGoalDraft(sidebar.value.mediaId, goal)
     if (demoMode) {
       sidebar.value.mode = 'result'
       sidebar.value.loading = true
@@ -215,6 +299,12 @@ export function useAnalysisWorkspace({
       return
     }
     analyze(sidebar.value.mediaId, goal)
+  }
+
+  const startNewAnalysis = () => {
+    sidebar.value.mode = 'compose'
+    sidebar.value.loading = false
+    sidebar.value.error = ''
   }
 
   const startPlanEdit = () => {
@@ -328,6 +418,7 @@ export function useAnalysisWorkspace({
     closeSidebar,
     openAgent,
     submitAgent,
+    startNewAnalysis,
     showDemoResult,
     startPlanEdit,
     cancelPlanEdit,
@@ -337,5 +428,32 @@ export function useAnalysisWorkspace({
     submitFollowUp,
     sendFeedback,
     formatPercent: value => `${Math.round((Number(value) || 0) * 100)}%`
+  }
+}
+
+function formatDuration(value) {
+  const milliseconds = Number(value) || 0
+  if (milliseconds < 1000) return `${Math.round(milliseconds)} 毫秒`
+  return `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)} 秒`
+}
+
+function goalDraftKey(mediaId) {
+  return `dovideo:goal:${mediaId}`
+}
+
+function loadGoalDraft(mediaId) {
+  try {
+    return localStorage.getItem(goalDraftKey(mediaId)) || DEFAULT_GOAL
+  } catch {
+    return DEFAULT_GOAL
+  }
+}
+
+function saveGoalDraft(mediaId, goal) {
+  if (!mediaId || !goal?.trim()) return
+  try {
+    localStorage.setItem(goalDraftKey(mediaId), goal.trim())
+  } catch {
+    // Private browsing can disable storage; the current session still works.
   }
 }
