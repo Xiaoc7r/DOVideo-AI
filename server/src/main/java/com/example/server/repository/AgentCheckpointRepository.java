@@ -132,6 +132,7 @@ public class AgentCheckpointRepository {
             redisTemplate.expire(key, CACHE_TTL);
         } catch (RuntimeException e) {
             log.warn("agent_checkpoint_cache_write_failed key={} field={}", key, field, e);
+            evictFields(key, e, field, "stage");
         }
     }
 
@@ -141,12 +142,17 @@ public class AgentCheckpointRepository {
             redisTemplate.expire(key, CACHE_TTL);
         } catch (RuntimeException e) {
             log.warn("agent_checkpoint_stage_cache_write_failed key={}", key, e);
+            evictFields(key, e, "stage");
         }
     }
 
     private void evictField(String key, String field, Exception originalError) {
+        evictFields(key, originalError, field);
+    }
+
+    private void evictFields(String key, Exception originalError, String... fields) {
         try {
-            redisTemplate.opsForHash().delete(key, field);
+            redisTemplate.opsForHash().delete(key, (Object[]) fields);
         } catch (RuntimeException cleanupError) {
             originalError.addSuppressed(cleanupError);
         }

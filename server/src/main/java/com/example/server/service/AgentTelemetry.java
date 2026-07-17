@@ -1,5 +1,6 @@
 package com.example.server.service;
 
+import com.example.server.utils.AnalysisTaskKeys;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -10,8 +11,10 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.DoubleAdder;
@@ -25,7 +28,7 @@ public class AgentTelemetry {
     private static final Duration TRACE_TTL = Duration.ofDays(7);
 
     private final Map<String, TraceData> traces = new ConcurrentHashMap<>();
-    private final Map<Long, String> latestTraceByTask = new ConcurrentHashMap<>();
+    private final Map<String, String> latestTraceByTask = new ConcurrentHashMap<>();
     private final ThreadLocal<String> currentTrace = new ThreadLocal<>();
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
@@ -35,18 +38,19 @@ public class AgentTelemetry {
         this.objectMapper = objectMapper;
     }
 
-    public String start(Long taskId) {
+    public String start(Long taskId, String goal) {
+        String taskKey = taskKey(taskId, goal);
         if (traces.size() >= MAX_TRACES) {
             traces.values().stream()
                     .min(Comparator.comparing(trace -> trace.startedAt))
                     .ifPresent(trace -> {
                         traces.remove(trace.traceId);
-                        latestTraceByTask.remove(trace.taskId, trace.traceId);
+                        latestTraceByTask.remove(trace.taskKey, trace.traceId);
                     });
         }
         String traceId = UUID.randomUUID().toString();
-        traces.put(traceId, new TraceData(traceId, taskId));
-        latestTraceByTask.put(taskId, traceId);
+        traces.put(traceId, new TraceData(traceId, taskId, AnalysisTaskKeys.goalDigest(goal), taskKey));
+        latestTraceByTask.put(taskKey, traceId);
         currentTrace.set(traceId);
         persist(traces.get(traceId));
         log.info("agent_trace traceId={} taskId={} stage=START status=SUCCESS", traceId, taskId);
@@ -121,12 +125,16 @@ public class AgentTelemetry {
         stage(traceId, stage, startedNanos, true);
     }
 
-    public Map<String, Object> latest(Long taskId) {
-        String traceId = latestTraceByTask.get(taskId);
+    public Map<String, Object> latest(Long taskId, String goal) {
+        String taskKey = taskKey(taskId, goal);
+        String traceId = latestTraceByTask.get(taskKey);
         TraceData trace = traceId == null ? null : traces.get(traceId);
         if (trace != null) return trace.snapshot();
         try {
-            if (traceId == null) traceId = redisTemplate.opsForValue().get(latestTraceKey(taskId));
+            if (traceId == null) {
+                traceId = redisTemplate.opsForValue().get(
+                        latestTraceKey(taskId, AnalysisTaskKeys.goalDigest(goal)));
+            }
             String snapshot = traceId == null ? null : redisTemplate.opsForValue().get(traceKey(traceId));
             return snapshot == null
                     ? Map.of()
@@ -138,21 +146,39 @@ public class AgentTelemetry {
     }
 
     public void deleteTask(Long taskId) {
-        String traceId = latestTraceByTask.remove(taskId);
-        if (traceId == null) traceId = redisTemplate.opsForValue().get(latestTraceKey(taskId));
-        if (traceId != null) {
-            traces.remove(traceId);
-            redisTemplate.delete(traceKey(traceId));
+        String prefix = taskId + ":";
+        Set<String> traceIds = new HashSet<>();
+        latestTraceByTask.entrySet().removeIf(entry -> {
+            if (!entry.getKey().startsWith(prefix)) return false;
+            traceIds.add(entry.getValue());
+            return true;
+        });
+        try {
+            Set<String> latestKeys = redisTemplate.opsForSet().members(traceIndexKey(taskId));
+            if (latestKeys != null) {
+                for (String latestKey : latestKeys) {
+                    String traceId = redisTemplate.opsForValue().get(latestKey);
+                    if (traceId != null) traceIds.add(traceId);
+                }
+                redisTemplate.delete(latestKeys);
+            }
+            traceIds.forEach(traceId -> redisTemplate.delete(traceKey(traceId)));
+            redisTemplate.delete(traceIndexKey(taskId));
+        } catch (RuntimeException e) {
+            log.warn("agent_trace_cleanup_failed taskId={}", taskId, e);
         }
-        redisTemplate.delete(latestTraceKey(taskId));
+        traceIds.forEach(traces::remove);
     }
 
     private void persist(TraceData trace) {
         try {
             redisTemplate.opsForValue().set(
                     traceKey(trace.traceId), objectMapper.writeValueAsString(trace.snapshot()), TRACE_TTL);
+            String latestKey = latestTraceKey(trace.taskId, trace.goalDigest);
             redisTemplate.opsForValue().set(
-                    latestTraceKey(trace.taskId), trace.traceId, TRACE_TTL);
+                    latestKey, trace.traceId, TRACE_TTL);
+            redisTemplate.opsForSet().add(traceIndexKey(trace.taskId), latestKey);
+            redisTemplate.expire(traceIndexKey(trace.taskId), TRACE_TTL);
         } catch (Exception e) {
             log.warn("agent_trace_persist_failed traceId={} taskId={}", trace.traceId, trace.taskId, e);
         }
@@ -162,8 +188,16 @@ public class AgentTelemetry {
         return "agent:trace:" + traceId;
     }
 
-    private String latestTraceKey(Long taskId) {
-        return "agent:trace:task:" + taskId;
+    private String latestTraceKey(Long taskId, String goalDigest) {
+        return "agent:trace:task:" + taskId + ":" + goalDigest;
+    }
+
+    private String traceIndexKey(Long taskId) {
+        return "agent:trace:task:" + taskId + ":goals";
+    }
+
+    private String taskKey(Long taskId, String goal) {
+        return taskId + ":" + AnalysisTaskKeys.goalDigest(goal);
     }
 
     private long estimateTokens(String text) {
@@ -176,15 +210,19 @@ public class AgentTelemetry {
     private static class TraceData {
         private final String traceId;
         private final Long taskId;
+        private final String goalDigest;
+        private final String taskKey;
         private final Instant startedAt = Instant.now();
         private final Map<String, Long> stageDurations = new ConcurrentHashMap<>();
         private final Map<String, LongAdder> counters = new ConcurrentHashMap<>();
         private final Map<String, Double> values = new ConcurrentHashMap<>();
         private final DoubleAdder estimatedCost = new DoubleAdder();
 
-        private TraceData(String traceId, Long taskId) {
+        private TraceData(String traceId, Long taskId, String goalDigest, String taskKey) {
             this.traceId = traceId;
             this.taskId = taskId;
+            this.goalDigest = goalDigest;
+            this.taskKey = taskKey;
         }
 
         private void increment(String metric, long amount) {
@@ -197,6 +235,7 @@ public class AgentTelemetry {
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("traceId", traceId);
             result.put("taskId", taskId);
+            result.put("goalDigest", goalDigest);
             result.put("startedAt", startedAt);
             result.put("stageDurationMs", new LinkedHashMap<>(stageDurations));
             result.put("counters", counterSnapshot);

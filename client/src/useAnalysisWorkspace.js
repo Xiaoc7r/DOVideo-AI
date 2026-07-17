@@ -56,12 +56,12 @@ export function useAnalysisWorkspace({
     try {
       const requests = [
         apiRequest(`/analysis/agent-plan?${params}`),
-        apiRequest(`/analysis/agent-trace?id=${id}`)
+        apiRequest(`/analysis/agent-trace?${params}`)
       ]
       if (includeEvaluation) requests.push(apiRequest(`/analysis/agent-evaluation?${params}`))
 
       const responses = await Promise.all(requests)
-      if (sidebar.value.mediaId !== id) return
+      if (sidebar.value.mediaId !== id || sidebar.value.goal !== goal) return
 
       const planText = responses[0].ok ? await responses[0].text() : ''
       const traceText = responses[1].ok ? await responses[1].text() : ''
@@ -77,14 +77,18 @@ export function useAnalysisWorkspace({
   }
 
   const startTaskStream = (id, type, goal = '') => {
+    const scope = type === 'ai' ? goal : ''
+    const isCurrentTask = () => sidebar.value.mediaId === id
+      && sidebar.value.type === type
+      && (type !== 'ai' || sidebar.value.goal === goal)
     const finish = async (result, failed = false) => {
-      if (sidebar.value.visible && sidebar.value.type === type && sidebar.value.mediaId === id) {
+      if (sidebar.value.visible && isCurrentTask()) {
         sidebar.value.content = result
         sidebar.value.loading = false
         if (type === 'ai' && !failed) await refreshAgentMeta(id, goal, true)
       }
       showMessage(failed ? '任务执行失败，请稍后重试' : '任务完成', failed)
-      taskStreams.stop(id, type)
+      taskStreams.stop(id, type, scope)
     }
 
     const params = new URLSearchParams({ id: String(id) })
@@ -93,13 +97,13 @@ export function useAnalysisWorkspace({
       ? `/analysis/analysis-events?${params}`
       : `/analysis/transcription-events?${params}`
 
-    taskStreams.start(id, type, path, async status => {
-      if (sidebar.value.mediaId === id && sidebar.value.type === type && status.message) {
+    taskStreams.start(id, type, scope, path, async status => {
+      if (isCurrentTask() && status.message) {
         sidebar.value.content = status.state === 'PROCESSING' || status.state === 'QUEUED'
           ? status.message
           : sidebar.value.content
       }
-      if (type === 'ai' && status.stage && sidebar.value.mediaId === id) {
+      if (type === 'ai' && status.stage && isCurrentTask()) {
         await refreshAgentMeta(id, goal, false)
       }
       if (status.state === 'COMPLETED') {
@@ -154,7 +158,7 @@ export function useAnalysisWorkspace({
   }
 
   const analyze = async (id, goal) => {
-    if (taskStreams.has(id, 'ai')) {
+    if (taskStreams.has(id, 'ai', goal)) {
       sidebar.value.mode = 'result'
       sidebar.value.loading = true
       return
@@ -224,7 +228,7 @@ export function useAnalysisWorkspace({
   }
 
   const addPlanTask = () => {
-    if (sidebar.value.planDraft.length < 8) sidebar.value.planDraft.push('')
+    if (sidebar.value.planDraft.length < 5) sidebar.value.planDraft.push('')
   }
 
   const removePlanTask = index => {
@@ -233,8 +237,8 @@ export function useAnalysisWorkspace({
 
   const rerunWithPlan = async () => {
     const tasks = sidebar.value.planDraft.map(task => task.trim()).filter(Boolean)
-    if (!tasks.length || tasks.length > 8) {
-      showMessage('计划需保留 1 至 8 个有效任务', true)
+    if (!tasks.length || tasks.length > 5) {
+      showMessage('计划需保留 1 至 5 个有效任务', true)
       return
     }
     if (demoMode) {

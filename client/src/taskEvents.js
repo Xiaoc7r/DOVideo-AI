@@ -2,10 +2,10 @@ import { apiRequest } from './api'
 
 export function createTaskStreams() {
   const streams = new Map()
-  const keyOf = (id, type) => `${type}:${id}`
+  const keyOf = (id, type, scope = '') => `${type}:${id}:${scope}`
 
-  const stop = (id, type) => {
-    const key = keyOf(id, type)
+  const stop = (id, type, scope = '') => {
+    const key = keyOf(id, type, scope)
     streams.get(key)?.abort()
     streams.delete(key)
   }
@@ -15,9 +15,9 @@ export function createTaskStreams() {
     streams.clear()
   }
 
-  const start = (id, type, path, onEvent, onError) => {
-    stop(id, type)
-    const key = keyOf(id, type)
+  const start = (id, type, scope, path, onEvent, onError) => {
+    stop(id, type, scope)
+    const key = keyOf(id, type, scope)
     const controller = new AbortController()
     streams.set(key, controller)
 
@@ -49,7 +49,7 @@ export function createTaskStreams() {
   }
 
   return {
-    has: (id, type) => streams.has(keyOf(id, type)),
+    has: (id, type, scope = '') => streams.has(keyOf(id, type, scope)),
     start,
     stop,
     stopAll

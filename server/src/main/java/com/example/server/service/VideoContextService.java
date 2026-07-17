@@ -1,7 +1,7 @@
 package com.example.server.service;
 
 import com.example.server.dto.VideoContext;
-import com.example.server.utils.AliyunAsrUtils;
+import com.example.server.dto.TranscriptSegment;
 import com.example.server.utils.MinioUtils;
 import com.example.server.utils.OcrUtils;
 import org.slf4j.Logger;
@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -33,24 +34,25 @@ import java.util.stream.Stream;
 public class VideoContextService {
 
     private static final Logger log = LoggerFactory.getLogger(VideoContextService.class);
+    private static final String EVIDENCE_OBJECT_PREFIX = "evidence-frames";
     private static final long SEGMENT_MS = 60_000L;
     private static final long FALLBACK_FRAME_INTERVAL_MS = 30_000L;
     private static final Pattern PTS_TIME = Pattern.compile("pts_time:([0-9.]+)");
 
-    private final AliyunAsrUtils aliyunAsrUtils;
+    private final SegmentedTranscriptionService transcriptionService;
     private final OcrUtils ocrUtils;
     private final MinioUtils minioUtils;
     private final Executor asrExecutor;
     private final Executor ocrExecutor;
     private final AgentTelemetry telemetry;
 
-    public VideoContextService(AliyunAsrUtils aliyunAsrUtils,
+    public VideoContextService(SegmentedTranscriptionService transcriptionService,
                                OcrUtils ocrUtils,
                                MinioUtils minioUtils,
                                @Qualifier("asrExecutor") Executor asrExecutor,
                                @Qualifier("ocrExecutor") Executor ocrExecutor,
                                AgentTelemetry telemetry) {
-        this.aliyunAsrUtils = aliyunAsrUtils;
+        this.transcriptionService = transcriptionService;
         this.ocrUtils = ocrUtils;
         this.minioUtils = minioUtils;
         this.asrExecutor = asrExecutor;
@@ -65,15 +67,18 @@ public class VideoContextService {
     public VideoContext build(String videoPath, String userGoal, String traceId) {
         String readableVideoPath = minioUtils.readableSource(videoPath);
         Path workDir = Path.of(System.getProperty("java.io.tmpdir"), "video-context-" + UUID.randomUUID());
+        List<String> uploadedEvidenceFrames = new CopyOnWriteArrayList<>();
         try {
             Files.createDirectories(workDir);
             // 两条分支各跑各的，单路挂掉还能带着另一半信息继续往下走。
-            CompletableFuture<BranchResult<TranscriptPart>> transcriptFuture = submitBranch(
+            CompletableFuture<BranchResult<TranscriptSegment>> transcriptFuture = submitBranch(
                     asrExecutor,
-                    () -> transcribeBySegments(readableVideoPath, workDir.resolve("audio"), traceId));
+                    () -> transcriptionService.transcribe(
+                            readableVideoPath, workDir.resolve("audio"), traceId));
             CompletableFuture<BranchResult<FramePart>> frameFuture = submitBranch(
                     ocrExecutor,
-                    () -> extractKeyFrames(readableVideoPath, workDir.resolve("frames"), traceId));
+                    () -> extractKeyFrames(
+                            readableVideoPath, workDir.resolve("frames"), traceId, uploadedEvidenceFrames));
             try {
                 CompletableFuture.allOf(transcriptFuture, frameFuture).get(60, TimeUnit.MINUTES);
             } catch (TimeoutException e) {
@@ -86,7 +91,7 @@ public class VideoContextService {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("VideoContext 构建被中断", e);
             }
-            BranchResult<TranscriptPart> transcriptResult = transcriptFuture.join();
+            BranchResult<TranscriptSegment> transcriptResult = transcriptFuture.join();
             BranchResult<FramePart> frameResult = frameFuture.join();
             if (transcriptResult.failed() && frameResult.failed()) {
                 IllegalStateException failure = new IllegalStateException(
@@ -101,15 +106,39 @@ public class VideoContextService {
             if (frameResult.failed()) {
                 telemetry.increment(traceId, "ocrBranchFailures", 1);
                 log.warn("video_context_ocr_branch_failed", frameResult.error());
+                deleteEvidenceFrames(uploadedEvidenceFrames);
+                uploadedEvidenceFrames.clear();
             }
             List<VideoContext.VideoSegment> segments = merge(transcriptResult.items(), frameResult.items());
             if (segments.isEmpty()) throw new IllegalStateException("视频未解析出有效语音或画面文字");
             return new VideoContext(videoPath, userGoal, segments);
         } catch (Exception e) {
+            deleteEvidenceFrames(uploadedEvidenceFrames);
             throw new IllegalStateException("VideoContext 构建失败", e);
         } finally {
             deleteDirectory(workDir);
         }
+    }
+
+    public void deleteEvidenceFrames(VideoContext context) {
+        if (context == null) return;
+        deleteEvidenceFrames(context.segments().stream()
+                .flatMap(segment -> segment.evidenceFrames().stream())
+                .distinct()
+                .toList());
+    }
+
+    private void deleteEvidenceFrames(List<String> frames) {
+        frames.stream()
+                .filter(frame -> minioUtils.isManagedFile(frame, EVIDENCE_OBJECT_PREFIX))
+                .distinct()
+                .forEach(frame -> {
+                    try {
+                        minioUtils.removeFile(frame);
+                    } catch (RuntimeException e) {
+                        log.warn("evidence_frame_cleanup_failed frame={}", frame, e);
+                    }
+                });
     }
 
     private <T> CompletableFuture<BranchResult<T>> submitBranch(
@@ -127,44 +156,10 @@ public class VideoContextService {
         }
     }
 
-    private List<TranscriptPart> transcribeBySegments(String videoPath, Path audioDir, String traceId) throws Exception {
-        Files.createDirectories(audioDir);
-        Path outputPattern = audioDir.resolve("audio_%03d.mp3");
-        runCommand(List.of(
-                "ffmpeg", "-y", "-i", videoPath,
-                "-vn", "-acodec", "libmp3lame",
-                "-f", "segment", "-segment_time", "60", "-reset_timestamps", "1",
-                outputPattern.toString()
-        ), null);
-
-        List<Path> audioFiles;
-        try (var paths = Files.list(audioDir)) {
-            audioFiles = paths.filter(Files::isRegularFile).sorted().toList();
-        }
-
-        List<TranscriptPart> result = new ArrayList<>();
-        int failedSegments = 0;
-        for (int i = 0; i < audioFiles.size(); i++) {
-            Path audioFile = audioFiles.get(i);
-            try {
-                telemetry.increment(traceId, "asrCalls", 1);
-                String text = aliyunAsrUtils.audioToText(audioFile.toString());
-                if (text != null && !text.isBlank()) {
-                    result.add(new TranscriptPart(i * SEGMENT_MS, (i + 1) * SEGMENT_MS, text));
-                }
-            } catch (RuntimeException e) {
-                failedSegments++;
-                telemetry.increment(traceId, "asrSegmentFailures", 1);
-                log.warn("asr_segment_failed segment={} file={}", i, audioFile.getFileName(), e);
-            }
-        }
-        if (result.isEmpty() && failedSegments > 0) {
-            throw new IllegalStateException("所有 ASR 分片均处理失败");
-        }
-        return result;
-    }
-
-    private List<FramePart> extractKeyFrames(String videoPath, Path frameDir, String traceId) throws Exception {
+    private List<FramePart> extractKeyFrames(String videoPath,
+                                             Path frameDir,
+                                             String traceId,
+                                             List<String> uploadedEvidenceFrames) throws Exception {
         Files.createDirectories(frameDir);
         List<Long> timestamps = new ArrayList<>();
         runCommand(List.of(
@@ -202,7 +197,11 @@ public class VideoContextService {
             }
             String frameUrl;
             try {
-                frameUrl = minioUtils.uploadLocalFile(frameFiles.get(i).toFile());
+                frameUrl = minioUtils.uploadLocalFile(
+                        frameFiles.get(i).toFile(),
+                        frameFiles.get(i).getFileName().toString(),
+                        EVIDENCE_OBJECT_PREFIX);
+                uploadedEvidenceFrames.add(frameUrl);
             } catch (Exception e) {
                 telemetry.increment(traceId, "frameUploadFailures", 1);
                 log.warn("evidence_frame_upload_failed frame={} timestampMs={}",
@@ -217,9 +216,9 @@ public class VideoContextService {
         return result;
     }
 
-    private List<VideoContext.VideoSegment> merge(List<TranscriptPart> transcripts, List<FramePart> frames) {
+    private List<VideoContext.VideoSegment> merge(List<TranscriptSegment> transcripts, List<FramePart> frames) {
         Map<Long, SegmentBuilder> windows = new TreeMap<>();
-        for (TranscriptPart transcript : transcripts) {
+        for (TranscriptSegment transcript : transcripts) {
             long windowStart = windowStart(transcript.startMs());
             windows.computeIfAbsent(windowStart, SegmentBuilder::new).transcripts.add(transcript.text());
         }
@@ -307,9 +306,6 @@ public class VideoContextService {
         } catch (Exception e) {
             log.warn("temporary_directory_cleanup_failed path={}", directory, e);
         }
-    }
-
-    private record TranscriptPart(long startMs, long endMs, String text) {
     }
 
     private record FramePart(long timestampMs, String ocrText, String frameName) {

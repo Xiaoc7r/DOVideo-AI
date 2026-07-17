@@ -18,6 +18,7 @@ public class MediaFile {
     private String filename;
     private String status;
     private String filePath;
+    private String contentHash;
 
     private String aiSummary;
     private String transcriptText;

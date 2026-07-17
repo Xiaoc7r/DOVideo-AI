@@ -16,11 +16,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.security.DigestOutputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
@@ -38,7 +36,7 @@ public class ChunkUploadService {
     private static final String UPLOAD_KEY_PREFIX = "upload:chunked:";
     private static final long MAX_CHUNK_BYTES = 5L * 1024 * 1024;
     private static final int MAX_TOTAL_CHUNKS = 410;
-    private static final Path UPLOAD_DIR = Path.of(System.getProperty("java.io.tmpdir"), "dovideo-chunks");
+    private static final String CHUNK_OBJECT_PREFIX = "chunk-uploads/";
 
     private final StringRedisTemplate redisTemplate;
     private final RedissonClient redissonClient;
@@ -69,7 +67,6 @@ public class ChunkUploadService {
         metadata.put("userId", String.valueOf(userId));
         redisTemplate.opsForHash().putAll(uploadKey(uploadId), metadata);
         redisTemplate.expire(uploadKey(uploadId), 1, TimeUnit.DAYS);
-        Files.createDirectories(uploadDirectory(uploadId));
         return uploadId;
     }
 
@@ -87,7 +84,7 @@ public class ChunkUploadService {
                             int chunkIndex,
                             int totalChunks,
                             MultipartFile chunk,
-                            Long userId) throws IOException {
+                            Long userId) throws Exception {
         if (chunk == null || chunk.isEmpty()) throw new IllegalArgumentException("chunk is empty");
         if (chunk.getSize() > MAX_CHUNK_BYTES) {
             throw new IllegalArgumentException("chunk size cannot exceed 5MB");
@@ -99,10 +96,12 @@ public class ChunkUploadService {
             throw new IllegalArgumentException("invalid chunk index or totalChunks");
         }
 
-        Path directory = uploadDirectory(uploadId);
-        Files.createDirectories(directory);
         try (InputStream inputStream = chunk.getInputStream()) {
-            Files.copy(inputStream, chunkPath(directory, chunkIndex), StandardCopyOption.REPLACE_EXISTING);
+            minioUtils.uploadObject(
+                    chunkObjectName(uploadId, chunkIndex),
+                    inputStream,
+                    chunk.getSize(),
+                    "application/octet-stream");
         }
         redisTemplate.opsForSet().add(partsKey(uploadId), String.valueOf(chunkIndex));
         redisTemplate.expire(uploadKey(uploadId), 1, TimeUnit.DAYS);
@@ -110,7 +109,7 @@ public class ChunkUploadService {
     }
 
     public MediaFile complete(String uploadId, Long userId) throws Exception {
-        uploadDirectory(uploadId);
+        validateUploadId(uploadId);
         RLock mergeLock = redissonClient.getLock("lock:upload:merge:" + uploadId);
         if (!mergeLock.tryLock()) throw new IllegalStateException("upload is already being merged");
 
@@ -121,32 +120,33 @@ public class ChunkUploadService {
             Map<Object, Object> metadata = requireUpload(uploadId, userId);
             String filename = String.valueOf(metadata.get("filename"));
             int totalChunks = Integer.parseInt(String.valueOf(metadata.get("totalChunks")));
-            Path directory = uploadDirectory(uploadId);
             Set<Integer> uploadedChunks = uploadedChunks(uploadId, userId);
             if (uploadedChunks.size() != totalChunks) {
                 throw new IllegalStateException("not all chunks have been uploaded");
             }
 
-            Path mergedFile = directory.resolve("merged" + fileSuffix(filename));
+            Path mergedFile = Files.createTempFile("dovideo-merged-", fileSuffix(filename));
             MessageDigest digest = md5Digest();
-            try (OutputStream fileOutput = Files.newOutputStream(mergedFile);
-                 DigestOutputStream digestOutput = new DigestOutputStream(fileOutput, digest);
-                 BufferedOutputStream output = new BufferedOutputStream(digestOutput)) {
-                for (int i = 0; i < totalChunks; i++) {
-                    Path part = chunkPath(directory, i);
-                    if (!Files.isRegularFile(part)) throw new IllegalStateException("missing chunk: " + i);
-                    Files.copy(part, output);
+            try {
+                try (OutputStream fileOutput = Files.newOutputStream(mergedFile);
+                     DigestOutputStream digestOutput = new DigestOutputStream(fileOutput, digest);
+                     BufferedOutputStream output = new BufferedOutputStream(digestOutput)) {
+                    for (int i = 0; i < totalChunks; i++) {
+                        minioUtils.copyObjectTo(chunkObjectName(uploadId, i), output);
+                    }
                 }
-            }
 
-            String fileUrl = minioUtils.uploadLocalFile(mergedFile.toFile(), filename);
-            MediaFile mediaFile = mediaService.saveUploadedMedia(
-                    filename, fileUrl, userId, HexFormat.of().formatHex(digest.digest()));
-            // 先记成功再清现场。清理失败或客户端重试，都不会再插一条媒体记录。
-            redisTemplate.opsForValue().set(
-                    completedKey(uploadId), String.valueOf(mediaFile.getId()), 1, TimeUnit.DAYS);
-            cleanup(uploadId, mediaFile.getId());
-            return mediaFile;
+                String fileUrl = minioUtils.uploadLocalFile(mergedFile.toFile(), filename);
+                MediaFile mediaFile = mediaService.saveUploadedMedia(
+                        filename, fileUrl, userId, HexFormat.of().formatHex(digest.digest()));
+                // 先记成功再清现场。清理失败或客户端重试，都不会再插一条媒体记录。
+                redisTemplate.opsForValue().set(
+                        completedKey(uploadId), String.valueOf(mediaFile.getId()), 1, TimeUnit.DAYS);
+                cleanup(uploadId, totalChunks, mediaFile.getId());
+                return mediaFile;
+            } finally {
+                Files.deleteIfExists(mergedFile);
+            }
         } finally {
             if (mergeLock.isHeldByCurrentThread()) mergeLock.unlock();
         }
@@ -164,7 +164,7 @@ public class ChunkUploadService {
     }
 
     private Map<Object, Object> requireUpload(String uploadId, Long userId) {
-        uploadDirectory(uploadId);
+        validateUploadId(uploadId);
         Map<Object, Object> metadata = redisTemplate.opsForHash().entries(uploadKey(uploadId));
         if (metadata.isEmpty()) {
             throw new IllegalArgumentException("uploadId does not exist or has expired");
@@ -175,32 +175,27 @@ public class ChunkUploadService {
         return metadata;
     }
 
-    private Path uploadDirectory(String uploadId) {
+    private void validateUploadId(String uploadId) {
         try {
             UUID.fromString(uploadId);
         } catch (Exception e) {
             throw new IllegalArgumentException("invalid uploadId");
         }
-        return UPLOAD_DIR.resolve(uploadId);
     }
 
-    private void cleanup(String uploadId, Long mediaId) {
-        try {
-            Path directory = uploadDirectory(uploadId);
-            if (Files.exists(directory)) {
-                try (var paths = Files.walk(directory)) {
-                    paths.sorted(Comparator.reverseOrder()).forEach(path -> {
-                        try {
-                            Files.deleteIfExists(path);
-                        } catch (IOException e) {
-                            throw new IllegalStateException("failed to clean upload files", e);
-                        }
-                    });
-                }
+    private void cleanup(String uploadId, int totalChunks, Long mediaId) {
+        for (int i = 0; i < totalChunks; i++) {
+            try {
+                minioUtils.removeObject(chunkObjectName(uploadId, i));
+            } catch (RuntimeException e) {
+                log.warn("chunk_object_cleanup_failed uploadId={} chunkIndex={} mediaId={}",
+                        uploadId, i, mediaId, e);
             }
+        }
+        try {
             redisTemplate.delete(List.of(uploadKey(uploadId), partsKey(uploadId)));
-        } catch (Exception e) {
-            log.warn("chunk_upload_cleanup_failed uploadId={} mediaId={}", uploadId, mediaId, e);
+        } catch (RuntimeException e) {
+            log.warn("chunk_upload_metadata_cleanup_failed uploadId={} mediaId={}", uploadId, mediaId, e);
         }
     }
 
@@ -224,8 +219,9 @@ public class ChunkUploadService {
         return uploadKey(uploadId) + ":completed";
     }
 
-    private Path chunkPath(Path directory, int chunkIndex) {
-        return directory.resolve("part-" + chunkIndex);
+    private String chunkObjectName(String uploadId, int chunkIndex) {
+        validateUploadId(uploadId);
+        return CHUNK_OBJECT_PREFIX + uploadId + "/part-" + chunkIndex;
     }
 
     private String fileSuffix(String filename) {

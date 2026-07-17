@@ -50,12 +50,18 @@ public class AgentLoopService {
         validateContext(context);
         AgentState savedState = mediaId == null ? null
                 : checkpointService.loadCriticState(mediaId, context.userGoal());
-        if (savedState != null && savedState.result() != null
+        boolean terminalCheckpoint = savedState != null && savedState.result() != null
                 && (savedState.round() >= MAX_ROUNDS
-                || (savedState.critique() != null && savedState.critique().passed()))) {
+                || (savedState.critique() != null && savedState.critique().passed()));
+        if (terminalCheckpoint && isPlanValid(savedState.plan()) && isResultValid(savedState.result())) {
             checkpointService.saveResult(mediaId, savedState);
             telemetry.incrementCurrent("terminalCheckpointHits", 1);
             return savedState;
+        }
+        if (terminalCheckpoint) {
+            telemetry.incrementCurrent("invalidTerminalCheckpointRepairs", 1);
+            savedState = new AgentState(
+                    savedState.goal(), savedState.plan(), savedState.result(), savedState.critique(), 0);
         }
 
         VideoContext relevantContext = longVideoContextService.selectRelevant(mediaId, context);
@@ -83,7 +89,7 @@ public class AgentLoopService {
                 plan = revisePlanForRetry(mediaId, relevantContext, plan, state.critique());
             }
         }
-        if (state.result() == null) throw new IllegalStateException("Agent 未生成结果");
+        validateResult(state.result());
         if (mediaId != null) checkpointService.saveResult(mediaId, state);
         return state;
     }
@@ -95,11 +101,20 @@ public class AgentLoopService {
                 ? null
                 : checkpointService.loadPlan(mediaId, context.userGoal());
         if (plan == null && savedState != null) plan = savedState.plan();
+        boolean shouldPersist = false;
         if (plan == null) {
             plan = deepSeekUtils.plan(context);
-            if (mediaId != null) checkpointService.savePlan(mediaId, context.userGoal(), plan);
+            shouldPersist = true;
+        }
+        if (!isPlanValid(plan)) {
+            plan = deepSeekUtils.repairPlan(context, plan);
+            telemetry.incrementCurrent("planStructureRepairs", 1);
+            shouldPersist = true;
         }
         validatePlan(plan);
+        if (mediaId != null && shouldPersist) {
+            checkpointService.savePlan(mediaId, context.userGoal(), plan);
+        }
         return plan;
     }
 
@@ -109,8 +124,8 @@ public class AgentLoopService {
                                     AgentState.CriticResult previousCritique,
                                     int round) {
         AnalysisResult result = deepSeekUtils.execute(context, plan, previousCritique);
-        validateResult(result);
         AgentState.CriticResult critique = deepSeekUtils.critique(context, plan, result);
+        critique = enforceStructureBounds(result, critique);
         critique = enforceEvidenceBounds(context, result, critique);
         telemetry.incrementCurrent("criticRounds", 1);
         if (critique.passed()) telemetry.incrementCurrent("criticPassed", 1);
@@ -147,18 +162,27 @@ public class AgentLoopService {
     }
 
     private void validatePlan(AgentState.AgentPlan plan) {
-        if (plan == null || plan.understoodGoal().isBlank()
-                || plan.tasks().isEmpty() || plan.tasks().size() > MAX_PLAN_TASKS
-                || plan.tasks().stream().anyMatch(task -> task == null || task.isBlank() || task.length() > 500)) {
+        if (!isPlanValid(plan)) {
             throw new IllegalStateException("Planner 返回了无效任务列表");
         }
     }
 
+    private boolean isPlanValid(AgentState.AgentPlan plan) {
+        return plan != null && !plan.understoodGoal().isBlank()
+                && !plan.tasks().isEmpty() && plan.tasks().size() <= MAX_PLAN_TASKS
+                && plan.tasks().stream().noneMatch(
+                task -> task == null || task.isBlank() || task.length() > 500);
+    }
+
     private void validateResult(AnalysisResult result) {
-        if (result == null || result.title().isBlank()
-                || result.conclusions().isEmpty() || result.evidence().isEmpty()) {
+        if (!isResultValid(result)) {
             throw new IllegalStateException("Executor 未生成完整结构化结果");
         }
+    }
+
+    private boolean isResultValid(AnalysisResult result) {
+        return result != null && !result.title().isBlank()
+                && !result.conclusions().isEmpty() && !result.evidence().isEmpty();
     }
 
     private AgentState.CriticResult enforceEvidenceBounds(VideoContext context,
@@ -213,6 +237,25 @@ public class AgentLoopService {
                 critique.missingRequirements(),
                 unsupported,
                 requiredTimestamps);
+    }
+
+    private AgentState.CriticResult enforceStructureBounds(AnalysisResult result,
+                                                            AgentState.CriticResult critique) {
+        List<String> feedback = new ArrayList<>(critique == null ? List.of() : critique.feedback());
+        if (result == null || result.title().isBlank()) feedback.add("补充明确的产物标题");
+        if (result == null || result.conclusions().isEmpty()) feedback.add("补充覆盖 Planner 任务的核心结论");
+        if (result == null || result.evidence().isEmpty()) feedback.add("为核心结论补充带时间戳的 ASR 或 OCR 证据");
+        if (feedback.isEmpty() || critique == null) {
+            return critique == null
+                    ? new AgentState.CriticResult(false, feedback, List.of(), List.of(), List.of())
+                    : critique;
+        }
+        return new AgentState.CriticResult(
+                false,
+                feedback,
+                critique.missingRequirements(),
+                critique.unsupportedClaims(),
+                critique.requiredTimestamps());
     }
 
     private VideoContext contextForRetry(Long mediaId,

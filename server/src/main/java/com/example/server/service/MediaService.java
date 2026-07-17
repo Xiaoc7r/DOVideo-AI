@@ -2,6 +2,7 @@ package com.example.server.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.example.server.entity.MediaFile;
+import com.example.server.dto.VideoContext;
 import com.example.server.mapper.MediaFileMapper;
 import com.example.server.utils.MinioUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -38,6 +39,7 @@ public class MediaService {
     private final AgentCheckpointService checkpointService;
     private final AgentTelemetry telemetry;
     private final QdrantVectorStore vectorStore;
+    private final VideoContextService videoContextService;
 
     private static final String MEDIA_MD5_KEY_PREFIX = "media:md5:";
     private static final Set<String> VIDEO_SUFFIXES = Set.of(
@@ -49,7 +51,8 @@ public class MediaService {
                         ObjectMapper objectMapper,
                         AgentCheckpointService checkpointService,
                         AgentTelemetry telemetry,
-                        QdrantVectorStore vectorStore) {
+                        QdrantVectorStore vectorStore,
+                        VideoContextService videoContextService) {
         this.mediaFileMapper = mediaFileMapper;
         this.redisTemplate = redisTemplate;
         this.minioUtils = minioUtils;
@@ -57,6 +60,7 @@ public class MediaService {
         this.checkpointService = checkpointService;
         this.telemetry = telemetry;
         this.vectorStore = vectorStore;
+        this.videoContextService = videoContextService;
     }
 
     public String calculateMd5(MultipartFile file) throws IOException {
@@ -72,6 +76,7 @@ public class MediaService {
     }
 
     public void rememberContentHash(Long mediaId, String md5) {
+        if (mediaId == null || md5 == null || md5.isBlank()) return;
         try {
             redisTemplate.opsForValue().set(MEDIA_MD5_KEY_PREFIX + mediaId, md5);
         } catch (RuntimeException e) {
@@ -86,6 +91,7 @@ public class MediaService {
         mediaFile.setStatus("COMPLETED");
         mediaFile.setUploadTime(LocalDateTime.now());
         mediaFile.setUserId(userId);
+        mediaFile.setContentHash(md5);
         try {
             mediaFileMapper.insert(mediaFile);
             rememberContentHash(mediaFile.getId(), md5);
@@ -122,8 +128,28 @@ public class MediaService {
         return mediaFiles;
     }
 
+    public String contentHash(Long mediaId) {
+        try {
+            String cached = redisTemplate.opsForValue().get(MEDIA_MD5_KEY_PREFIX + mediaId);
+            if (cached != null && !cached.isBlank()) return cached;
+        } catch (RuntimeException e) {
+            log.warn("media_hash_cache_read_failed mediaId={}", mediaId, e);
+        }
+
+        MediaFile mediaFile = mediaFileMapper.selectById(mediaId);
+        String persisted = mediaFile == null ? null : mediaFile.getContentHash();
+        rememberContentHash(mediaId, persisted);
+        return persisted;
+    }
+
     public void deleteOwnedMedia(Long mediaId, Long userId) {
         MediaFile mediaFile = requireOwnedMedia(mediaId, userId);
+        VideoContext context = null;
+        try {
+            context = checkpointService.loadContext(mediaId);
+        } catch (RuntimeException e) {
+            log.warn("media_evidence_manifest_read_failed mediaId={}", mediaId, e);
+        }
         mediaFileMapper.deleteById(mediaId);
         if (mediaFile.getFilePath() != null && mediaFile.getFilePath().startsWith("http")) {
             try {
@@ -133,6 +159,7 @@ public class MediaService {
                         mediaId, mediaFile.getFilePath(), e);
             }
         }
+        videoContextService.deleteEvidenceFrames(context);
         try {
             redisTemplate.delete(List.of(
                     MEDIA_MD5_KEY_PREFIX + mediaId,

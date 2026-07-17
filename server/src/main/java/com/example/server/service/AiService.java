@@ -4,15 +4,12 @@ import com.example.server.dto.AgentFeedback;
 import com.example.server.dto.AgentState;
 import com.example.server.dto.TaskStatus;
 import com.example.server.dto.TaskStage;
-import com.example.server.dto.VideoChunk;
 import com.example.server.dto.VideoContext;
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-
-import java.util.List;
 
 /** 视频分析的应用层入口，负责串起上下文构建、AgentLoop 和结果落库。 */
 @Service
@@ -45,7 +42,7 @@ public class AiService {
     }
 
     public void asyncAnalyze(Long mediaId, String userGoal) {
-        String traceId = telemetry.start(mediaId);
+        String traceId = telemetry.start(mediaId, userGoal);
         telemetry.bind(traceId);
         TaskStage currentStage = TaskStage.VIDEO_CONTEXT;
         MediaFile mediaFile = mediaFileMapper.selectById(mediaId);
@@ -109,7 +106,12 @@ public class AiService {
         long started = System.nanoTime();
         try {
             VideoContext context = videoContextService.build(mediaFile.getFilePath(), userGoal, traceId);
-            checkpointService.saveContext(mediaFile.getId(), context);
+            try {
+                checkpointService.saveContext(mediaFile.getId(), context);
+            } catch (RuntimeException e) {
+                videoContextService.deleteEvidenceFrames(context);
+                throw e;
+            }
             telemetry.stage(traceId, TaskStage.VIDEO_CONTEXT.name(), started, true);
             return context;
         } catch (RuntimeException e) {
@@ -122,7 +124,7 @@ public class AiService {
         VideoContext context = checkpointService.loadContext(mediaId);
         if (context == null) throw new IllegalStateException("视频尚未完成 VideoContext 构建");
 
-        String traceId = telemetry.start(mediaId);
+        String traceId = telemetry.start(mediaId, question);
         telemetry.bind(traceId);
         try {
             VideoContext followUpContext = new VideoContext(context.source(), question, context.segments());
@@ -163,14 +165,24 @@ public class AiService {
 
         VideoContext sourceContext = checkpointService.loadContext(sourceMediaId);
         if (sourceContext == null) return false;
-        checkpointService.saveContext(mediaId, new VideoContext(
-                mediaFile.getFilePath(), "", sourceContext.segments()));
-        List<VideoChunk> chunks = checkpointService.loadChunks(sourceMediaId);
-        if (chunks != null && !chunks.isEmpty()) checkpointService.saveChunks(mediaId, chunks);
+        checkpointService.saveContext(mediaId, reusableContext(mediaFile.getFilePath(), sourceContext));
         checkpointService.saveResult(mediaId, new AgentState(
                 state.goal(), state.plan(), state.result(), state.critique(), state.round()));
         persistResult(mediaFile, state);
         return true;
+    }
+
+    private VideoContext reusableContext(String targetSource, VideoContext sourceContext) {
+        return new VideoContext(targetSource, "", sourceContext.segments().stream()
+                .map(segment -> new VideoContext.VideoSegment(
+                        segment.startMs(),
+                        segment.endMs(),
+                        segment.transcript(),
+                        segment.ocrTexts(),
+                        segment.evidenceFrames().isEmpty()
+                                ? java.util.List.of()
+                                : java.util.List.of(targetSource + "#timestampMs=" + segment.startMs())))
+                .toList());
     }
 
     private void persistResult(MediaFile mediaFile, AgentState agentState) {

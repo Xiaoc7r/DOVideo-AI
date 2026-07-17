@@ -28,6 +28,7 @@ public class AnalysisDispatchService {
     private static final Duration ACTIVE_TTL = Duration.ofHours(6);
 
     private final AiService aiService;
+    private final MediaService mediaService;
     private final StringRedisTemplate redisTemplate;
     private final RocketMQTemplate rocketMQTemplate;
     private final RedissonClient redissonClient;
@@ -35,6 +36,7 @@ public class AnalysisDispatchService {
     private final String analysisTopic;
 
     public AnalysisDispatchService(AiService aiService,
+                                   MediaService mediaService,
                                    StringRedisTemplate redisTemplate,
                                    RocketMQTemplate rocketMQTemplate,
                                    RedissonClient redissonClient,
@@ -42,6 +44,7 @@ public class AnalysisDispatchService {
                                    @Value("${rocketmq.topic.video-analysis:video-analysis-topic}")
                                    String analysisTopic) {
         this.aiService = aiService;
+        this.mediaService = mediaService;
         this.redisTemplate = redisTemplate;
         this.rocketMQTemplate = rocketMQTemplate;
         this.redissonClient = redissonClient;
@@ -110,7 +113,7 @@ public class AnalysisDispatchService {
 
     private String contentHash(Long mediaId) {
         return AnalysisTaskKeys.normalizeContentHash(
-                mediaId, redisTemplate.opsForValue().get("media:md5:" + mediaId));
+                mediaId, mediaService.contentHash(mediaId));
     }
 
     public enum SubmissionResult {

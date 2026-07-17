@@ -88,6 +88,28 @@ public class DeepSeekUtils {
         }
     }
 
+    public AgentState.AgentPlan repairPlan(VideoContext context,
+                                           AgentState.AgentPlan invalidPlan) {
+        try {
+            String prompt = """
+                    你是 Video Agent 的 Planner。上一份计划 JSON 可以解析，但业务结构不完整。
+                    请补全目标理解，并输出 1 到 5 个非空、按顺序执行、可由当前 VideoContext 验证的任务。
+                    只返回 JSON：
+                    {
+                      "understoodGoal": "对用户目标的明确理解",
+                      "tasks": ["任务1", "任务2"]
+                    }
+                    InvalidPlan:
+                    """ + objectMapper.writeValueAsString(invalidPlan) + """
+
+                    VideoContext:
+                    """ + objectMapper.writeValueAsString(context);
+            return structuredChat("PLANNER_REPAIR", prompt, AgentState.AgentPlan.class);
+        } catch (Exception e) {
+            throw new IllegalStateException("Agent 任务计划修复失败", e);
+        }
+    }
+
     public VideoChunk.ChunkSummary summarizeChunk(List<VideoContext.VideoSegment> segments) {
         try {
             String prompt = """

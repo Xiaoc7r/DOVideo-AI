@@ -18,6 +18,7 @@ public class LongVideoContextService {
 
     private static final long CHUNK_MS = 5 * 60 * 1000L;
     private static final int TOP_K = 3;
+    private static final int MAX_CONTEXT_CHARS = 24_000;
 
     private final DeepSeekUtils deepSeekUtils;
     private final EmbeddingUtils embeddingUtils;
@@ -44,7 +45,7 @@ public class LongVideoContextService {
     public VideoContext selectRelevant(Long mediaId, VideoContext context) {
         if (context.segments().isEmpty()
                 || context.segments().get(context.segments().size() - 1).endMs() <= CHUNK_MS) {
-            return context;
+            return withinBudget(context, context.segments());
         }
 
         List<VideoChunk> chunks = mediaId == null ? null : checkpointService.loadChunks(mediaId);
@@ -69,10 +70,8 @@ public class LongVideoContextService {
 
         List<VideoContext.VideoSegment> selectedSegments = rankedChunks.stream()
                 .flatMap(chunk -> chunk.rawSegments().stream())
-                .sorted(Comparator.comparingLong(VideoContext.VideoSegment::startMs))
                 .toList();
-
-        return new VideoContext(context.source(), context.userGoal(), selectedSegments);
+        return withinBudget(context, selectedSegments);
     }
 
     public VideoContext refineForCritique(Long mediaId,
@@ -80,25 +79,18 @@ public class LongVideoContextService {
                                           VideoContext selectedContext,
                                           AgentState.CriticResult critique) {
         Map<String, VideoContext.VideoSegment> segments = new LinkedHashMap<>();
-        selectedContext.segments().forEach(segment -> segments.put(segmentKey(segment), segment));
-
         List<Long> requiredTimestamps = critique == null ? List.of() : critique.requiredTimestamps();
-        if (requiredTimestamps != null) {
-            fullContext.segments().stream()
-                    .filter(segment -> requiredTimestamps.stream().anyMatch(timestamp ->
-                            nearSegment(timestamp, segment)))
-                    .forEach(segment -> segments.put(segmentKey(segment), segment));
-        }
+        fullContext.segments().stream()
+                .filter(segment -> requiredTimestamps.stream().anyMatch(timestamp ->
+                        nearSegment(timestamp, segment)))
+                .forEach(segment -> segments.put(segmentKey(segment), segment));
+        selectedContext.segments().forEach(segment -> segments.putIfAbsent(segmentKey(segment), segment));
 
         String critiqueQuery = critiqueQuery(fullContext.userGoal(), critique);
         VideoContext retryContext = selectRelevant(mediaId,
                 new VideoContext(fullContext.source(), critiqueQuery, fullContext.segments()));
-        retryContext.segments().forEach(segment -> segments.put(segmentKey(segment), segment));
-
-        List<VideoContext.VideoSegment> merged = segments.values().stream()
-                .sorted(Comparator.comparingLong(VideoContext.VideoSegment::startMs))
-                .toList();
-        return new VideoContext(fullContext.source(), fullContext.userGoal(), merged);
+        retryContext.segments().forEach(segment -> segments.putIfAbsent(segmentKey(segment), segment));
+        return withinBudget(fullContext, new ArrayList<>(segments.values()));
     }
 
     private String critiqueQuery(String goal, AgentState.CriticResult critique) {
@@ -112,6 +104,23 @@ public class LongVideoContextService {
 
     private String segmentKey(VideoContext.VideoSegment segment) {
         return segment.startMs() + ":" + segment.endMs();
+    }
+
+    private VideoContext withinBudget(VideoContext context,
+                                      List<VideoContext.VideoSegment> candidates) {
+        List<VideoContext.VideoSegment> selected = new ArrayList<>();
+        int usedChars = 0;
+        for (VideoContext.VideoSegment segment : candidates) {
+            int segmentChars = segment.transcript().length()
+                    + segment.ocrTexts().stream().mapToInt(String::length).sum();
+            if (!selected.isEmpty() && usedChars + segmentChars > MAX_CONTEXT_CHARS) continue;
+            selected.add(segment);
+            usedChars += segmentChars;
+        }
+        telemetry.incrementCurrent("contextSegmentsDropped", candidates.size() - selected.size());
+        telemetry.valueCurrent("contextChars", usedChars);
+        selected.sort(Comparator.comparingLong(VideoContext.VideoSegment::startMs));
+        return new VideoContext(context.source(), context.userGoal(), selected);
     }
 
     private boolean nearSegment(long timestamp, VideoContext.VideoSegment segment) {

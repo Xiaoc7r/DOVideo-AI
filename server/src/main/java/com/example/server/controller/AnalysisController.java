@@ -158,9 +158,10 @@ public class AnalysisController {
     @GetMapping("/agent-trace")
     public Map<String, Object> agentTrace(
             @RequestParam Long id,
+            @RequestParam String goal,
             @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
         mediaService.requireOwnedMedia(id, userId);
-        return telemetry.latest(id);
+        return telemetry.latest(id, normalizeText(goal, "分析目标"));
     }
 
     private String normalizeText(String value, String field) {

@@ -1,5 +1,7 @@
 package com.example.server.utils;
 
+import io.minio.GetObjectArgs;
+import io.minio.GetObjectResponse;
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
@@ -14,6 +16,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.nio.file.Files;
 import java.util.UUID;
@@ -57,8 +60,16 @@ public class MinioUtils {
     }
 
     public String uploadLocalFile(File file, String originalFilename) throws Exception {
+        return uploadLocalFile(file, originalFilename, "");
+    }
+
+    public String uploadLocalFile(File file, String originalFilename, String objectPrefix) throws Exception {
         if (file == null || !file.isFile()) throw new IllegalArgumentException("local file does not exist");
-        String objectName = UUID.randomUUID() + fileSuffix(originalFilename);
+        String normalizedPrefix = objectPrefix == null || objectPrefix.isBlank()
+                ? ""
+                : objectPrefix.replaceAll("^/+|/+$", "") + "/";
+        String objectName = normalizedPrefix + UUID.randomUUID() + fileSuffix(originalFilename);
+        validateObjectName(objectName);
         String contentType = Files.probeContentType(file.toPath());
         if (contentType == null) contentType = "application/octet-stream";
         try (FileInputStream inputStream = new FileInputStream(file)) {
@@ -72,12 +83,41 @@ public class MinioUtils {
         return objectUrl(objectName);
     }
 
+    public String uploadObject(String objectName,
+                               InputStream inputStream,
+                               long size,
+                               String contentType) throws Exception {
+        validateObjectName(objectName);
+        minioClient.putObject(PutObjectArgs.builder()
+                .bucket(bucketName)
+                .object(objectName)
+                .stream(inputStream, size, -1)
+                .contentType(contentType)
+                .build());
+        return objectUrl(objectName);
+    }
+
+    public void copyObjectTo(String objectName, OutputStream outputStream) {
+        validateObjectName(objectName);
+        try (GetObjectResponse inputStream = minioClient.getObject(GetObjectArgs.builder()
+                .bucket(bucketName)
+                .object(objectName)
+                .build())) {
+            inputStream.transferTo(outputStream);
+        } catch (Exception e) {
+            throw new IllegalStateException("MinIO 文件读取失败", e);
+        }
+    }
+
     public void removeFile(String fileUrl) {
         if (fileUrl == null || fileUrl.isBlank()) return;
+        if (!isManagedFile(fileUrl)) return;
+        removeObject(objectName(fileUrl));
+    }
+
+    public void removeObject(String objectName) {
+        validateObjectName(objectName);
         try {
-            String path = URI.create(fileUrl).getPath();
-            String objectName = path.substring(path.lastIndexOf('/') + 1);
-            if (objectName.isBlank()) throw new IllegalArgumentException("invalid MinIO object URL");
             minioClient.removeObject(RemoveObjectArgs.builder()
                     .bucket(bucketName)
                     .object(objectName)
@@ -85,6 +125,19 @@ public class MinioUtils {
             log.info("minio_object_deleted object={}", objectName);
         } catch (Exception e) {
             throw new IllegalStateException("MinIO 文件删除失败", e);
+        }
+    }
+
+    public boolean isManagedFile(String fileUrl) {
+        return fileUrl != null && fileUrl.startsWith(endpoint + "/" + bucketName + "/");
+    }
+
+    public boolean isManagedFile(String fileUrl, String objectPrefix) {
+        if (!isManagedFile(fileUrl)) return false;
+        try {
+            return objectName(fileUrl).startsWith(objectPrefix + "/");
+        } catch (IllegalArgumentException e) {
+            return false;
         }
     }
 
@@ -102,15 +155,26 @@ public class MinioUtils {
         }
     }
 
-    private String objectUrl(String objectName) {
+    public String objectUrl(String objectName) {
+        validateObjectName(objectName);
         return endpoint + "/" + bucketName + "/" + objectName;
     }
 
     private String objectName(String fileUrl) {
         String path = URI.create(fileUrl).getPath();
-        String objectName = path.substring(path.lastIndexOf('/') + 1);
-        if (objectName.isBlank()) throw new IllegalArgumentException("invalid MinIO object URL");
+        String bucketPrefix = "/" + bucketName + "/";
+        int start = path.indexOf(bucketPrefix);
+        if (start < 0) throw new IllegalArgumentException("invalid MinIO object URL");
+        String objectName = path.substring(start + bucketPrefix.length());
+        validateObjectName(objectName);
         return objectName;
+    }
+
+    private void validateObjectName(String objectName) {
+        if (objectName == null || objectName.isBlank()
+                || objectName.startsWith("/") || objectName.contains("..")) {
+            throw new IllegalArgumentException("invalid MinIO object name");
+        }
     }
 
     private String fileSuffix(String filename) {
