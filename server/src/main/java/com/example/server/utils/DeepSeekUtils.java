@@ -11,6 +11,7 @@ import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.List;
 
 @Component
@@ -26,7 +27,8 @@ public class DeepSeekUtils {
 
     public DeepSeekUtils(@Value("${ai.deepseek.api-key}") String apiKey,
                          @Value("${ai.deepseek.base-url}") String baseUrl,
-                         @Value("${ai.deepseek.model:deepseek-ai/DeepSeek-R1-Distill-Qwen-32B}") String modelName,
+                         @Value("${ai.deepseek.model:deepseek-ai/DeepSeek-V3.2}") String modelName,
+                         @Value("${ai.deepseek.timeout-seconds:300}") long timeoutSeconds,
                          @Value("${ai.deepseek.input-price-per-million:0}") double inputPricePerMillion,
                          @Value("${ai.deepseek.output-price-per-million:0}") double outputPricePerMillion,
                          AgentTelemetry telemetry,
@@ -35,6 +37,10 @@ public class DeepSeekUtils {
                 .baseUrl(baseUrl)
                 .apiKey(apiKey)
                 .modelName(modelName)
+                // Long-video evidence prompts can take longer than the SDK default timeout.
+                // Retry policy is handled by chat() below to avoid nested retries.
+                .timeout(Duration.ofSeconds(timeoutSeconds))
+                .maxRetries(0)
                 .build();
         this.objectMapper = objectMapper;
         this.telemetry = telemetry;

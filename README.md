@@ -157,6 +157,8 @@ cp .env.example .env
 
 编辑 `.env`，至少设置数据库、Redis、MinIO 密码和 `SILICONFLOW_API_KEY`。密钥只保存在本地 `.env`，不要提交到仓库。
 
+默认 LLM 为 `deepseek-ai/DeepSeek-V3.2`。历史示例模型 `deepseek-ai/DeepSeek-R1-Distill-Qwen-32B` 已被硅基流动禁用，会返回 `Model disabled`。`LLM_TIMEOUT_SECONDS` 默认是 `300`，用于避免长视频证据分析在模型响应尚未返回时过早超时；模型或超时配置变更后需要重启后端。
+
 ### 2. 启动中间件
 
 ```bash
