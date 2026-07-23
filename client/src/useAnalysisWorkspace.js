@@ -461,7 +461,7 @@ export function useAnalysisWorkspace({
   const handlePlaybackError = () => {
     if (!sidebar.value.playbackUrl) return
     sidebar.value.playbackUrl = ''
-    sidebar.value.playbackError = '播放地址可能已失效，请重新加载'
+    sidebar.value.playbackError = '视频无法播放：可能是播放地址不可用，或视频编码不受当前浏览器支持。请重新加载；链接导入的视频可重新导入后再试。'
   }
 
   const resetWorkspace = () => {

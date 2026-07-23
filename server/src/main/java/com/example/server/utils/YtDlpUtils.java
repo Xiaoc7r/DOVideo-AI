@@ -42,6 +42,13 @@ public class YtDlpUtils {
         command.add("3");
         command.add("--max-filesize");
         command.add("2048M");
+        // Prefer the broadly supported H.264/AVC + AAC combination for imported
+        // videos. Merely changing an AV1 file's container to MP4 does not make it
+        // playable in Safari on every macOS and hardware combination.
+        command.add("-f");
+        command.add("bv*[vcodec^=avc1][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/b[vcodec^=avc1][ext=mp4]/bv*[vcodec^=avc1]+ba[acodec^=mp4a]");
+        command.add("--merge-output-format");
+        command.add("mp4");
         command.add("--recode-video");
         command.add("mp4");
         if (ffmpegDir != null && !ffmpegDir.isBlank()) {
