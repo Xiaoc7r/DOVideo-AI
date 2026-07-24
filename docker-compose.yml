@@ -40,7 +40,7 @@ services:
       - ./minio/data:/data
 
   rmqnamesrv:
-    image: apache/rocketmq:4.9.4
+    image: apache/rocketmq:5.3.2
     ports:
       - "9876:9876"
     environment:
@@ -48,7 +48,7 @@ services:
     command: sh mqnamesrv
 
   rmqbroker:
-    image: apache/rocketmq:4.9.4
+    image: apache/rocketmq:5.3.2
     ports:
       - "10911:10911"
       - "10909:10909"
@@ -58,8 +58,8 @@ services:
       BROKER_ROLE: ASYNC_MASTER
       JAVA_OPT_EXT: -server -Xms256m -Xmx256m -Xmn128m
     volumes:
-      - ./rocketmq/broker.conf:/opt/rocketmq-4.9.4/conf/broker.conf
-    command: sh mqbroker -n rmqnamesrv:9876 -c /opt/rocketmq-4.9.4/conf/broker.conf
+      - ./rocketmq/broker.conf:/home/rocketmq/rocketmq-5.3.2/conf/broker.conf
+    command: sh mqbroker -n rmqnamesrv:9876 -c /home/rocketmq/rocketmq-5.3.2/conf/broker.conf
     depends_on:
       - rmqnamesrv
 
