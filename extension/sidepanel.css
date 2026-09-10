@@ -1,0 +1,418 @@
+/*
+ * 配色沿用网页端的设计变量，保证两个界面看起来是同一个产品。
+ * 侧边栏可用宽度通常只有 360–420px，因此间距与字号按窄屏收敛。
+ */
+:root {
+  color-scheme: dark;
+  --bg-deep: #0b0c10;
+  --bg-card: #121418;
+  --bg-raised: #171a20;
+  --accent-lime: #c5f946;
+  --accent-purple: #8a2be2;
+  --text-main: #e0e0e0;
+  --text-sub: #71757a;
+  --text-inverse: #0b0c10;
+  --border-tech: #2a2d35;
+  --error: #ff6b6b;
+  --radius: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-deep);
+  color: var(--text-main);
+  font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ── 顶栏 ───────────────────────────────────────── */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-tech);
+  background: var(--bg-card);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.brand {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.brand::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--accent-lime);
+  box-shadow: 0 0 8px var(--accent-lime);
+  vertical-align: middle;
+}
+
+.top-status {
+  font-size: 11px;
+  color: var(--text-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+.panel {
+  padding: 14px;
+}
+
+/* ── 提示条 ─────────────────────────────────────── */
+
+.notice {
+  margin: 10px 14px 0;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-tech);
+  border-left: 3px solid var(--accent-lime);
+  background: var(--bg-raised);
+  color: var(--text-main);
+}
+
+.notice.error {
+  border-left-color: var(--error);
+  color: var(--error);
+}
+
+/* ── 表单 ───────────────────────────────────────── */
+
+.view-title {
+  margin: 0 0 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-sub);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.field {
+  display: block;
+  margin-bottom: 12px;
+  color: var(--text-sub);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+input,
+textarea,
+select {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-tech);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-main);
+  font: inherit;
+  letter-spacing: normal;
+  resize: vertical;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent-lime);
+  box-shadow: 0 0 0 2px rgba(197, 249, 70, 0.12);
+}
+
+textarea::placeholder {
+  color: #4a4f57;
+}
+
+button {
+  border: none;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.1s ease;
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.primary {
+  width: 100%;
+  margin-top: 4px;
+  background: var(--accent-lime);
+  color: var(--text-inverse);
+}
+
+.ghost {
+  width: 100%;
+  margin-bottom: 12px;
+  background: transparent;
+  color: var(--text-sub);
+  border: 1px solid var(--border-tech);
+}
+
+.ghost:hover:not(:disabled) {
+  border-color: var(--accent-lime);
+  color: var(--accent-lime);
+}
+
+.hint {
+  margin: 14px 0 0;
+  color: var(--text-sub);
+  font-size: 11px;
+}
+
+.hint a {
+  color: var(--accent-lime);
+}
+
+/* ── 阶段时间线 ─────────────────────────────────── */
+
+.stages {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+}
+
+.stages li {
+  position: relative;
+  padding: 5px 0 5px 24px;
+  color: var(--text-sub);
+  font-size: 12px;
+}
+
+/* 竖线连成时间线；最后一项不再往下画。 */
+.stages li::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 16px;
+  bottom: -5px;
+  width: 1px;
+  background: var(--border-tech);
+}
+
+.stages li:last-child::before {
+  display: none;
+}
+
+.stages li::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1px solid var(--border-tech);
+  background: var(--bg-deep);
+}
+
+.stages li.done {
+  color: var(--text-main);
+}
+
+.stages li.done::after {
+  background: var(--accent-lime);
+  border-color: var(--accent-lime);
+}
+
+.stages li.active {
+  color: var(--accent-lime);
+  font-weight: 600;
+}
+
+.stages li.active::after {
+  border-color: var(--accent-lime);
+  box-shadow: 0 0 0 3px rgba(197, 249, 70, 0.15);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.stages li.failed {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.stages li.failed::after {
+  background: var(--error);
+  border-color: var(--error);
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(197, 249, 70, 0.15); }
+  50% { box-shadow: 0 0 0 6px rgba(197, 249, 70, 0.05); }
+}
+
+.status {
+  margin: 0 0 12px;
+  color: var(--text-sub);
+  font-size: 12px;
+  min-height: 19px;
+}
+
+/* ── 结果区 ─────────────────────────────────────── */
+
+.result {
+  display: none;
+}
+
+.result.visible {
+  display: block;
+}
+
+.result.failed {
+  color: var(--error);
+}
+
+.result-title {
+  margin: 4px 0 14px;
+  font-size: 16px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.sub-title {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  color: var(--text-main);
+}
+
+/* 标题前的内容：承载「部分结论未通过 Critic 校验」这类关键提示。 */
+.callout {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(197, 249, 70, 0.3);
+  border-left: 3px solid var(--accent-lime);
+  background: rgba(197, 249, 70, 0.06);
+  font-size: 12px;
+}
+
+.card {
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--border-tech);
+  border-left: 3px solid var(--accent-lime);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.card-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.card-body > :first-child {
+  margin-top: 0;
+}
+
+.card-body > :last-child {
+  margin-bottom: 0;
+}
+
+.card-body p {
+  margin: 0 0 8px;
+}
+
+.card-body ul,
+.card-body ol {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
+.card-body li {
+  margin-bottom: 5px;
+}
+
+.card-body li::marker {
+  color: var(--accent-lime);
+}
+
+.quote {
+  margin: 0 0 10px;
+  padding: 8px 11px;
+  border-left: 3px solid var(--accent-purple);
+  border-radius: 0 8px 8px 0;
+  background: rgba(138, 43, 226, 0.08);
+  color: var(--text-main);
+  font-size: 12px;
+}
+
+.code {
+  margin: 0 0 8px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-tech);
+  overflow-x: auto;
+  font-size: 12px;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.card-body p code,
+.card-body li code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+  color: var(--accent-lime);
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--border-tech);
+  margin: 12px 0;
+}
+
+a {
+  color: var(--accent-lime);
+}
+
+/* 时间戳胶囊：点击跳到视频对应位置。 */
+.timestamp {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  margin: 0 3px;
+  border-radius: 999px;
+  border: 1px solid rgba(197, 249, 70, 0.35);
+  background: rgba(197, 249, 70, 0.08);
+  color: var(--accent-lime);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  vertical-align: baseline;
+}
+
+.timestamp:hover:not(:disabled) {
+  background: var(--accent-lime);
+  color: var(--text-inverse);
+}
+
+.timestamp:disabled {
+  opacity: 0.5;
+}

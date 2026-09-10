@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DoVideoAI</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand">DoVideoAI</span>
+    <span id="top-status" class="top-status"></span>
+  </header>
+
+  <div id="notice" class="notice" hidden></div>
+
+  <main class="panel">
+    <section id="login-view" hidden>
+      <h2 class="view-title">登录</h2>
+      <form id="login-form">
+        <label class="field">用户名
+          <input id="login-username" autocomplete="username" required />
+        </label>
+        <label class="field">密码
+          <input id="login-password" type="password" autocomplete="current-password" required />
+        </label>
+        <button type="submit" id="login-submit" class="primary">登录</button>
+      </form>
+      <p class="hint">还没有账号？请先到网页端注册：<a href="http://localhost:5173" target="_blank" rel="noreferrer">localhost:5173</a></p>
+    </section>
+
+    <section id="ready-view" hidden>
+      <h2 class="view-title">视频分析</h2>
+      <label class="field">视频链接
+        <textarea id="video-url" rows="2" placeholder="粘贴视频链接，或点击下方按钮自动抓取当前页"></textarea>
+      </label>
+      <button id="grab-btn" type="button" class="ghost">抓取当前页链接</button>
+      <label class="field">分析目标
+        <textarea id="goal" rows="3"></textarea>
+      </label>
+      <label class="field">分析模式
+        <select id="mode">
+          <option value="AUTO">自动（AI 识别意图）</option>
+          <option value="GENERAL">通用</option>
+          <option value="LEARNING">学习</option>
+          <option value="REVIEW">审查</option>
+          <option value="CREATION">创作</option>
+        </select>
+      </label>
+      <button id="submit-btn" type="button" class="primary">提交分析</button>
+    </section>
+
+    <section id="running-view" hidden>
+      <h2 class="view-title">分析进度</h2>
+      <ol id="stage-list" class="stages"></ol>
+      <p id="status-message" class="status"></p>
+      <!-- 渲染后的结果容器：由 markdownView.js 用 createElement 填充，不经过 innerHTML -->
+      <div id="result" class="result"></div>
+      <button id="back-btn" type="button" class="ghost" hidden>返回</button>
+    </section>
+  </main>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>

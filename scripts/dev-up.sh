@@ -45,6 +45,12 @@ node_major="$(node --version | sed 's/^v//' | cut -d. -f1)"
 
 docker info >/dev/null
 docker compose --env-file .env config --quiet
+
+# RocketMQ 镜像以 uid 3000 运行，而 Docker 首次创建的命名卷属于 root，
+# broker 会因写不了 commitlog 与日志而立即退出（exit 253）。首次启动前先修正属主。
+docker compose --env-file .env run --rm --no-deps --user root --entrypoint sh rmqbroker -c \
+  "mkdir -p /home/rocketmq/store /home/rocketmq/logs && chown -R 3000:3000 /home/rocketmq/store /home/rocketmq/logs"
+
 docker compose --env-file .env up --wait --wait-timeout 120
 
 curl --fail --silent --show-error --retry 20 --retry-connrefused --retry-delay 1 \
@@ -52,6 +58,25 @@ curl --fail --silent --show-error --retry 20 --retry-connrefused --retry-delay 1
   http://127.0.0.1:6333/healthz >/dev/null
 curl --fail --silent --show-error --retry 20 --retry-connrefused --retry-delay 1 \
   http://127.0.0.1:9000/minio/health/live >/dev/null
+
+echo "Waiting for RocketMQ broker to register..."
+for _ in $(seq 1 30); do
+  docker compose --env-file .env exec -T rmqbroker sh -c \
+    '$ROCKETMQ_HOME/bin/mqadmin clusterList -n rmqnamesrv:9876' 2>/dev/null | grep -q 'broker-a' && break
+  sleep 2
+done
+
+# 显式创建分析主题：消费者订阅的主题不存在时拿不到路由，会一直空转，
+# 不能依赖 RocketMQ 的自动建主题。updateTopic 对已存在的主题是幂等的。
+for topic in "${ROCKETMQ_ANALYSIS_TOPIC:-video-analysis-topic}" \
+             "${ROCKETMQ_ANALYSIS_DEAD_TOPIC:-video-analysis-dead-topic}"; do
+  docker compose --env-file .env exec -T rmqbroker sh -c \
+    "\$ROCKETMQ_HOME/bin/mqadmin updateTopic -n rmqnamesrv:9876 -c DefaultCluster -t $topic" >/dev/null || {
+    echo "Failed to create RocketMQ topic: $topic" >&2
+    exit 1
+  }
+  echo "RocketMQ topic ready: $topic"
+done
 
 docker compose --env-file .env ps
 echo
