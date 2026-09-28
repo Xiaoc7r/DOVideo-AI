@@ -11,6 +11,11 @@ import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
 import com.example.server.service.mode.ModeRegistry;
 import com.example.server.utils.AnalysisTaskKeys;
+import com.example.server.utils.DeepSeekUtils;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
@@ -34,6 +39,12 @@ public class AiService {
     private static final long CONTEXT_LOCK_WAIT_SECONDS = 300;
     /** 内容级归属索引的有效期，与结果复用键保持同一量级。 */
     private static final Duration CONTEXT_OWNER_TTL = Duration.ofDays(7);
+    /** 追问历史在 Redis 中的前缀。 */
+    private static final String FOLLOW_UP_HISTORY_KEY_PREFIX = "followup:history:";
+    /** 每个视频最多保留的追问轮数。 */
+    private static final int FOLLOW_UP_HISTORY_MAX = 10;
+    /** 追问历史的保留时间。 */
+    private static final Duration FOLLOW_UP_HISTORY_TTL = Duration.ofDays(7);
 
     private final MediaFileMapper mediaFileMapper;
     private final VideoContextService videoContextService;
@@ -46,6 +57,8 @@ public class AiService {
     private final RedissonClient redissonClient;
     private final StringRedisTemplate redisTemplate;
     private final ModeRegistry modeRegistry;
+    private final DeepSeekUtils deepSeekUtils;
+    private final ObjectMapper objectMapper;
 
     public AiService(MediaFileMapper mediaFileMapper,
                      VideoContextService videoContextService,
@@ -57,7 +70,9 @@ public class AiService {
                      TaskEventService taskEventService,
                      RedissonClient redissonClient,
                      StringRedisTemplate redisTemplate,
-                     ModeRegistry modeRegistry) {
+                     ModeRegistry modeRegistry,
+                     DeepSeekUtils deepSeekUtils,
+                     ObjectMapper objectMapper) {
         this.mediaFileMapper = mediaFileMapper;
         this.videoContextService = videoContextService;
         this.longVideoContextService = longVideoContextService;
@@ -69,6 +84,8 @@ public class AiService {
         this.redissonClient = redissonClient;
         this.redisTemplate = redisTemplate;
         this.modeRegistry = modeRegistry;
+        this.deepSeekUtils = deepSeekUtils;
+        this.objectMapper = objectMapper;
     }
 
     /** 兼容旧调用方:未指定模式时按 GENERAL 分析。 */
@@ -280,13 +297,20 @@ public class AiService {
         String traceId = telemetry.start(mediaId, question, resolvedMode);
         telemetry.bind(traceId);
         try {
-            AgentState previous = originalGoal == null
-                    ? null : checkpointService.loadResult(mediaId, originalGoal, resolvedMode);
-            String followUpGoal = contextualQuestion(originalGoal, previous, question);
-            VideoContext followUpContext = new VideoContext(
-                    context.source(), followUpGoal, context.segments());
-            return agentLoopService.run(
-                    mediaId, followUpContext, modeRegistry.of(resolvedMode)).result().toMarkdown();
+            return agentLoopService.executeWithinBudget(() -> {
+                AgentState previous = originalGoal == null
+                        ? null : checkpointService.loadResult(mediaId, originalGoal, resolvedMode);
+                String historyKey = followUpHistoryKey(mediaId, originalGoal, resolvedMode);
+                List<String> history = loadFollowUpHistory(historyKey, mediaId);
+                String evidenceSummary = retrieveEvidenceWithFunctionCalling(mediaId, context, question);
+                String followUpGoal = contextualQuestion(originalGoal, previous, question, history, evidenceSummary);
+                VideoContext followUpContext = new VideoContext(
+                        context.source(), followUpGoal, context.segments());
+                String answer = agentLoopService.run(
+                        mediaId, followUpContext, modeRegistry.of(resolvedMode)).result().toMarkdown();
+                saveFollowUpHistory(historyKey, mediaId, question, answer);
+                return answer;
+            });
         } finally {
             telemetry.flush(traceId);
             telemetry.clear();
@@ -381,16 +405,131 @@ public class AiService {
                 .toList());
     }
 
-    private String contextualQuestion(String originalGoal, AgentState previous, String question) {
-        if (originalGoal == null || previous == null || previous.result() == null) return question;
-        String previousResult = previous.result().toMarkdown();
-        if (previousResult.length() > 4_000) previousResult = previousResult.substring(0, 4_000);
-        return """
-                这是对同一视频的继续追问。请结合原始视频证据和已有分析回答当前问题。
-                原始目标：%s
-                已有分析：%s
-                当前追问：%s
-                """.formatted(originalGoal, previousResult, question);
+    private String contextualQuestion(String originalGoal, AgentState previous, String question, List<String> history, String evidenceSummary) {
+        StringBuilder sb = new StringBuilder("这是对同一视频的继续追问。请结合原始视频证据和已有分析回答当前问题。\n");
+        if (originalGoal != null && !originalGoal.isBlank()) {
+            sb.append("原始目标：").append(originalGoal).append("\n");
+        }
+        if (previous != null && previous.result() != null) {
+            String previousResult = previous.result().toMarkdown();
+            if (previousResult.length() > 4_000) previousResult = previousResult.substring(0, 4_000);
+            sb.append("已有分析：").append(previousResult).append("\n");
+        }
+        if (history != null && !history.isEmpty()) {
+            sb.append("历史对话：\n");
+            for (String item : history) {
+                sb.append(item).append("\n");
+            }
+        }
+        if (evidenceSummary != null && !evidenceSummary.isBlank()) {
+            sb.append("Function Calling 检索到的证据：\n").append(evidenceSummary).append("\n");
+        }
+        sb.append("当前追问：").append(question);
+        return sb.toString();
+    }
+
+    private List<String> loadFollowUpHistory(String key, Long mediaId) {
+        try {
+            List<String> history = redisTemplate.opsForList().range(key, 0, FOLLOW_UP_HISTORY_MAX - 1);
+            return history == null ? List.of() : history;
+        } catch (Exception e) {
+            log.warn("读取追问历史失败 mediaId={}", mediaId, e);
+            return List.of();
+        }
+    }
+
+    private void saveFollowUpHistory(String key, Long mediaId, String question, String answer) {
+        try {
+            String entry = "问：" + question + "\n答：" + answer;
+            redisTemplate.opsForList().rightPush(key, entry);
+            redisTemplate.opsForList().trim(key, -FOLLOW_UP_HISTORY_MAX, -1);
+            redisTemplate.expire(key, FOLLOW_UP_HISTORY_TTL);
+        } catch (Exception e) {
+            log.warn("保存追问历史失败 mediaId={}", mediaId, e);
+        }
+    }
+
+    private String followUpHistoryKey(Long mediaId, String originalGoal, AnalysisMode mode) {
+        String scopedGoal = originalGoal == null || originalGoal.isBlank()
+                ? "__FOLLOW_UP_WITHOUT_ORIGINAL_GOAL__"
+                : originalGoal;
+        return FOLLOW_UP_HISTORY_KEY_PREFIX + mediaId + ":"
+                + AnalysisTaskKeys.goalDigest(scopedGoal, mode);
+    }
+
+    /**
+     * 轻量 Function Calling：让模型通过 searchEvidence 工具检索视频证据，
+     * 再把检索结果摘要返回给上层。任何异常都不会阻断追问主流程。
+     */
+    private String retrieveEvidenceWithFunctionCalling(Long mediaId, VideoContext context, String question) {
+        try {
+            ToolSpecification searchTool = ToolSpecification.builder()
+                    .name("searchEvidence")
+                    .description("在视频的时间轴证据中检索与问题相关的片段，返回时间戳、语音文字和 OCR 文本。")
+                    .parameters(JsonObjectSchema.builder()
+                            .addStringProperty("query", "检索关键词或问题描述")
+                            .required("query")
+                            .build())
+                    .build();
+
+            String systemPrompt = """
+                    你是视频证据检索助手。根据用户的追问，调用 searchEvidence 工具检索相关视频证据。
+                    如果一次检索不够，可以多次调用。最后用简短中文总结检索到的证据要点。
+                    """;
+            String userPrompt = "当前追问：" + question;
+
+            return deepSeekUtils.chatWithTools(
+                    "FOLLOW_UP_RETRIEVAL",
+                    systemPrompt,
+                    userPrompt,
+                    List.of(searchTool),
+                    arguments -> {
+                        String query = extractQuery(arguments);
+                        VideoContext searchContext = new VideoContext(
+                                context.source(), query, context.segments());
+                        List<VideoEvidenceHit> hits = longVideoContextService.searchEvidence(mediaId, searchContext);
+                        return formatHits(hits);
+                    },
+                    3
+            );
+        } catch (AgentExecutionBudget.DeadlineExceededException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("Function Calling 检索证据失败，跳过增强检索 mediaId={}", mediaId, e);
+            return "";
+        }
+    }
+
+    private String extractQuery(String arguments) {
+        try {
+            JsonNode node = objectMapper.readTree(arguments);
+            JsonNode query = node.get("query");
+            return query == null ? "" : query.asText();
+        } catch (Exception e) {
+            log.warn("解析 searchEvidence 参数失败: {}", arguments, e);
+            return "";
+        }
+    }
+
+    private String formatHits(List<VideoEvidenceHit> hits) {
+        if (hits == null || hits.isEmpty()) {
+            return "未检索到相关证据";
+        }
+        StringBuilder sb = new StringBuilder();
+        int limit = Math.min(hits.size(), 5);
+        for (int i = 0; i < limit; i++) {
+            VideoEvidenceHit hit = hits.get(i);
+            sb.append(i + 1).append(". [")
+                    .append(hit.startMs()).append("ms-").append(hit.endMs()).append("ms] ")
+                    .append(hit.snippet() == null ? "" : hit.snippet()).append("\n");
+            if (hit.transcript() != null && !hit.transcript().isBlank()) {
+                sb.append("语音：").append(hit.transcript()).append("\n");
+            }
+            if (hit.ocrTexts() != null && !hit.ocrTexts().isEmpty()) {
+                sb.append("OCR：").append(String.join(" ", hit.ocrTexts())).append("\n");
+            }
+        }
+        return sb.toString();
     }
 
     private void persistResult(MediaFile mediaFile, AgentState agentState) {

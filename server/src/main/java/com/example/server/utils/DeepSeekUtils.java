@@ -9,12 +9,19 @@ import com.example.server.dto.VideoRetrievalIntent;
 import com.example.server.service.AgentExecutionBudget;
 import com.example.server.service.AgentTelemetry;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.exception.HttpException;
 import dev.langchain4j.exception.NonRetriableException;
 import dev.langchain4j.exception.RetriableException;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -22,7 +29,10 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
@@ -417,13 +427,20 @@ public class DeepSeekUtils {
     }
 
     private String invokeModel(String prompt) {
+        ChatRequest request = ChatRequest.builder()
+                .messages(List.of(
+                        SystemMessage.from(SYSTEM_POLICY),
+                        UserMessage.from(prompt)))
+                .build();
+        return invokeModel(request).aiMessage().text();
+    }
+
+    private ChatResponse invokeModel(ChatRequest request) {
         long remainingBudgetMs = AgentExecutionBudget.remainingMillis();
         long timeoutMs = Math.min(modelTimeoutMs, remainingBudgetMs);
-        Future<String> future;
+        Future<ChatResponse> future;
         try {
-            future = modelCallExecutor.submit(() -> chatModel.chat(
-                    SystemMessage.from(SYSTEM_POLICY),
-                    UserMessage.from(prompt)).aiMessage().text());
+            future = modelCallExecutor.submit(() -> chatModel.chat(request));
         } catch (RejectedExecutionException e) {
             throw new RetriableException("模型调用线程池繁忙", e);
         }
@@ -445,6 +462,85 @@ public class DeepSeekUtils {
             if (cause instanceof RuntimeException runtimeException) throw runtimeException;
             throw new IllegalStateException("模型调用失败", cause);
         }
+    }
+
+    /**
+     * 轻量 Function Calling：把工具描述传给模型，模型返回 tool call 后由调用方执行，
+     * 执行结果回填给模型，直到模型给出最终文本回答。
+     */
+    public String chatWithTools(
+            String stage,
+            String systemPrompt,
+            String userPrompt,
+            List<ToolSpecification> toolSpecifications,
+            Function<String, String> toolExecutor,
+            int maxRounds) {
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(SystemMessage.from(SYSTEM_POLICY + "\n" + systemPrompt));
+        messages.add(UserMessage.from(userPrompt));
+        for (int round = 0; round < maxRounds; round++) {
+            ChatRequest request = ChatRequest.builder()
+                    .messages(messages)
+                    .toolSpecifications(toolSpecifications)
+                    .build();
+            ChatResponse response = invokeToolModel(stage, request, messages.toString());
+            AiMessage aiMessage = response.aiMessage();
+            if (aiMessage.hasToolExecutionRequests()) {
+                messages.add(aiMessage);
+                for (ToolExecutionRequest toolRequest : aiMessage.toolExecutionRequests()) {
+                    boolean allowed = toolSpecifications.stream()
+                            .anyMatch(specification -> specification.name().equals(toolRequest.name()));
+                    if (!allowed) {
+                        throw new IllegalArgumentException("模型请求了未授权工具: " + toolRequest.name());
+                    }
+                    String result = toolExecutor.apply(toolRequest.arguments());
+                    messages.add(ToolExecutionResultMessage.from(toolRequest, result));
+                }
+            } else {
+                return aiMessage.text();
+            }
+        }
+        throw new IllegalStateException("Function calling exceeded max rounds: " + stage);
+    }
+
+    private ChatResponse invokeToolModel(String stage, ChatRequest request, String prompt) {
+        RuntimeException lastError = null;
+        for (int attempt = 0; attempt < MAX_MODEL_ATTEMPTS; attempt++) {
+            long started = System.nanoTime();
+            try {
+                ChatResponse response = invokeModel(request);
+                AiMessage aiMessage = response == null ? null : response.aiMessage();
+                if (aiMessage == null) throw new RetriableException("模型返回空响应");
+                String responseText = aiMessage.hasToolExecutionRequests()
+                        ? aiMessage.toolExecutionRequests().stream()
+                        .map(tool -> tool.name() + ":" + tool.arguments())
+                        .collect(Collectors.joining("\n"))
+                        : aiMessage.text();
+                if (responseText == null || responseText.isBlank()) {
+                    throw new RetriableException("模型返回空响应");
+                }
+                telemetry.modelCall(stage, prompt, responseText,
+                        inputPricePerMillion, outputPricePerMillion, started);
+                return response;
+            } catch (AgentExecutionBudget.DeadlineExceededException e) {
+                telemetry.incrementCurrent("modelCallFailures", 1);
+                telemetry.failCurrentStage(stage, started);
+                throw e;
+            } catch (RuntimeException e) {
+                lastError = e;
+                telemetry.incrementCurrent("modelCallFailures", 1);
+                boolean retriable = isRetriableModelFailure(e);
+                if (!retriable || attempt == MAX_MODEL_ATTEMPTS - 1) {
+                    telemetry.failCurrentStage(stage, started);
+                    if (!retriable) {
+                        throw new IllegalArgumentException("模型请求不可重试", e);
+                    }
+                    break;
+                }
+                waitBeforeRetry(attempt);
+            }
+        }
+        throw new IllegalStateException("模型调用达到最大重试次数", lastError);
     }
 
     private boolean isRetriableModelFailure(Throwable error) {
