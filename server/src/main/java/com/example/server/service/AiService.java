@@ -297,17 +297,20 @@ public class AiService {
         String traceId = telemetry.start(mediaId, question, resolvedMode);
         telemetry.bind(traceId);
         try {
-            AgentState previous = originalGoal == null
-                    ? null : checkpointService.loadResult(mediaId, originalGoal, resolvedMode);
-            List<String> history = loadFollowUpHistory(mediaId);
-            String evidenceSummary = retrieveEvidenceWithFunctionCalling(mediaId, context, question);
-            String followUpGoal = contextualQuestion(originalGoal, previous, question, history, evidenceSummary);
-            VideoContext followUpContext = new VideoContext(
-                    context.source(), followUpGoal, context.segments());
-            String answer = agentLoopService.run(
-                    mediaId, followUpContext, modeRegistry.of(resolvedMode)).result().toMarkdown();
-            saveFollowUpHistory(mediaId, question, answer);
-            return answer;
+            return agentLoopService.executeWithinBudget(() -> {
+                AgentState previous = originalGoal == null
+                        ? null : checkpointService.loadResult(mediaId, originalGoal, resolvedMode);
+                String historyKey = followUpHistoryKey(mediaId, originalGoal, resolvedMode);
+                List<String> history = loadFollowUpHistory(historyKey, mediaId);
+                String evidenceSummary = retrieveEvidenceWithFunctionCalling(mediaId, context, question);
+                String followUpGoal = contextualQuestion(originalGoal, previous, question, history, evidenceSummary);
+                VideoContext followUpContext = new VideoContext(
+                        context.source(), followUpGoal, context.segments());
+                String answer = agentLoopService.run(
+                        mediaId, followUpContext, modeRegistry.of(resolvedMode)).result().toMarkdown();
+                saveFollowUpHistory(historyKey, mediaId, question, answer);
+                return answer;
+            });
         } finally {
             telemetry.flush(traceId);
             telemetry.clear();
@@ -425,9 +428,9 @@ public class AiService {
         return sb.toString();
     }
 
-    private List<String> loadFollowUpHistory(Long mediaId) {
+    private List<String> loadFollowUpHistory(String key, Long mediaId) {
         try {
-            List<String> history = redisTemplate.opsForList().range(followUpHistoryKey(mediaId), 0, FOLLOW_UP_HISTORY_MAX - 1);
+            List<String> history = redisTemplate.opsForList().range(key, 0, FOLLOW_UP_HISTORY_MAX - 1);
             return history == null ? List.of() : history;
         } catch (Exception e) {
             log.warn("读取追问历史失败 mediaId={}", mediaId, e);
@@ -435,9 +438,8 @@ public class AiService {
         }
     }
 
-    private void saveFollowUpHistory(Long mediaId, String question, String answer) {
+    private void saveFollowUpHistory(String key, Long mediaId, String question, String answer) {
         try {
-            String key = followUpHistoryKey(mediaId);
             String entry = "问：" + question + "\n答：" + answer;
             redisTemplate.opsForList().rightPush(key, entry);
             redisTemplate.opsForList().trim(key, -FOLLOW_UP_HISTORY_MAX, -1);
@@ -447,8 +449,12 @@ public class AiService {
         }
     }
 
-    private String followUpHistoryKey(Long mediaId) {
-        return FOLLOW_UP_HISTORY_KEY_PREFIX + mediaId;
+    private String followUpHistoryKey(Long mediaId, String originalGoal, AnalysisMode mode) {
+        String scopedGoal = originalGoal == null || originalGoal.isBlank()
+                ? "__FOLLOW_UP_WITHOUT_ORIGINAL_GOAL__"
+                : originalGoal;
+        return FOLLOW_UP_HISTORY_KEY_PREFIX + mediaId + ":"
+                + AnalysisTaskKeys.goalDigest(scopedGoal, mode);
     }
 
     /**
@@ -486,6 +492,8 @@ public class AiService {
                     },
                     3
             );
+        } catch (AgentExecutionBudget.DeadlineExceededException e) {
+            throw e;
         } catch (Exception e) {
             log.warn("Function Calling 检索证据失败，跳过增强检索 mediaId={}", mediaId, e);
             return "";

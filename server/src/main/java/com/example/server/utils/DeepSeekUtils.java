@@ -32,6 +32,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
@@ -426,13 +427,20 @@ public class DeepSeekUtils {
     }
 
     private String invokeModel(String prompt) {
+        ChatRequest request = ChatRequest.builder()
+                .messages(List.of(
+                        SystemMessage.from(SYSTEM_POLICY),
+                        UserMessage.from(prompt)))
+                .build();
+        return invokeModel(request).aiMessage().text();
+    }
+
+    private ChatResponse invokeModel(ChatRequest request) {
         long remainingBudgetMs = AgentExecutionBudget.remainingMillis();
         long timeoutMs = Math.min(modelTimeoutMs, remainingBudgetMs);
-        Future<String> future;
+        Future<ChatResponse> future;
         try {
-            future = modelCallExecutor.submit(() -> chatModel.chat(
-                    SystemMessage.from(SYSTEM_POLICY),
-                    UserMessage.from(prompt)).aiMessage().text());
+            future = modelCallExecutor.submit(() -> chatModel.chat(request));
         } catch (RejectedExecutionException e) {
             throw new RetriableException("模型调用线程池繁忙", e);
         }
@@ -468,18 +476,23 @@ public class DeepSeekUtils {
             Function<String, String> toolExecutor,
             int maxRounds) {
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.from(systemPrompt));
+        messages.add(SystemMessage.from(SYSTEM_POLICY + "\n" + systemPrompt));
         messages.add(UserMessage.from(userPrompt));
         for (int round = 0; round < maxRounds; round++) {
             ChatRequest request = ChatRequest.builder()
                     .messages(messages)
                     .toolSpecifications(toolSpecifications)
                     .build();
-            ChatResponse response = chatModel.chat(request);
+            ChatResponse response = invokeToolModel(stage, request, messages.toString());
             AiMessage aiMessage = response.aiMessage();
             if (aiMessage.hasToolExecutionRequests()) {
                 messages.add(aiMessage);
                 for (ToolExecutionRequest toolRequest : aiMessage.toolExecutionRequests()) {
+                    boolean allowed = toolSpecifications.stream()
+                            .anyMatch(specification -> specification.name().equals(toolRequest.name()));
+                    if (!allowed) {
+                        throw new IllegalArgumentException("模型请求了未授权工具: " + toolRequest.name());
+                    }
                     String result = toolExecutor.apply(toolRequest.arguments());
                     messages.add(ToolExecutionResultMessage.from(toolRequest, result));
                 }
@@ -488,6 +501,46 @@ public class DeepSeekUtils {
             }
         }
         throw new IllegalStateException("Function calling exceeded max rounds: " + stage);
+    }
+
+    private ChatResponse invokeToolModel(String stage, ChatRequest request, String prompt) {
+        RuntimeException lastError = null;
+        for (int attempt = 0; attempt < MAX_MODEL_ATTEMPTS; attempt++) {
+            long started = System.nanoTime();
+            try {
+                ChatResponse response = invokeModel(request);
+                AiMessage aiMessage = response == null ? null : response.aiMessage();
+                if (aiMessage == null) throw new RetriableException("模型返回空响应");
+                String responseText = aiMessage.hasToolExecutionRequests()
+                        ? aiMessage.toolExecutionRequests().stream()
+                        .map(tool -> tool.name() + ":" + tool.arguments())
+                        .collect(Collectors.joining("\n"))
+                        : aiMessage.text();
+                if (responseText == null || responseText.isBlank()) {
+                    throw new RetriableException("模型返回空响应");
+                }
+                telemetry.modelCall(stage, prompt, responseText,
+                        inputPricePerMillion, outputPricePerMillion, started);
+                return response;
+            } catch (AgentExecutionBudget.DeadlineExceededException e) {
+                telemetry.incrementCurrent("modelCallFailures", 1);
+                telemetry.failCurrentStage(stage, started);
+                throw e;
+            } catch (RuntimeException e) {
+                lastError = e;
+                telemetry.incrementCurrent("modelCallFailures", 1);
+                boolean retriable = isRetriableModelFailure(e);
+                if (!retriable || attempt == MAX_MODEL_ATTEMPTS - 1) {
+                    telemetry.failCurrentStage(stage, started);
+                    if (!retriable) {
+                        throw new IllegalArgumentException("模型请求不可重试", e);
+                    }
+                    break;
+                }
+                waitBeforeRetry(attempt);
+            }
+        }
+        throw new IllegalStateException("模型调用达到最大重试次数", lastError);
     }
 
     private boolean isRetriableModelFailure(Throwable error) {
