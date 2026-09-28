@@ -30,11 +30,11 @@ test('多行 data 按换行拼接且 event 行被忽略', () => {
   const events = parser.push([
     'event: task-status',
     'data: {"state":"PROCESSING",',
-    'data: "stage":"CRITIC"}',
+    'data: "stage":"CRITIC_STARTED"}',
     '',
     ''
   ].join('\n'))
-  assert.deepEqual(events, [{ state: 'PROCESSING', stage: 'CRITIC' }])
+  assert.deepEqual(events, [{ state: 'PROCESSING', stage: 'CRITIC_STARTED' }])
 })
 
 test('无 data 行的帧（注释/心跳）被跳过', () => {
@@ -52,7 +52,7 @@ test('端到端：从 ReadableStream 消费直到终态', async () => {
     'data: {"state":"QUEUED","stage":null}\n\n'
     + 'data: {"state":"PROCESSING","stage":"RETRIEVAL"}\n\n'
     + 'data: {"state":"COMPLETED","result":"# 分析报告"}\n\n'
-    + 'data: {"state":"PROCESSING","stage":"CRITIC"}\n\n'
+    + 'data: {"state":"PROCESSING","stage":"CRITIC_STARTED"}\n\n'
   )
   const reader = body.getReader()
   const parser = createSseFrameParser()
@@ -78,7 +78,7 @@ test('端到端：从 ReadableStream 消费直到终态', async () => {
 test('终态判定只认 COMPLETED 与 FAILED', () => {
   assert.equal(isTerminalTaskEvent({ state: 'COMPLETED' }), true)
   assert.equal(isTerminalTaskEvent({ state: 'FAILED' }), true)
-  assert.equal(isTerminalTaskEvent({ state: 'PROCESSING', stage: 'PLANNER' }), false)
+  assert.equal(isTerminalTaskEvent({ state: 'PROCESSING', stage: 'PLAN_COMPLETED' }), false)
   assert.equal(isTerminalTaskEvent({ state: 'QUEUED' }), false)
   assert.equal(isTerminalTaskEvent(null), false)
 })

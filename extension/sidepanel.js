@@ -2,17 +2,12 @@ import { API_BASE } from './lib/config.js'
 import { isValidHttpUrl, isSameVideo, parseVideoUrl, withTimestamp } from './lib/urlParser.js'
 import { createSseFrameParser, isTerminalTaskEvent } from './lib/sseParser.js'
 import { renderResult } from './lib/markdownView.js'
+import { ANALYSIS_STAGES, analysisStageLabelOf, analysisStageOf } from './lib/stageProgress.js'
 
 const TOKEN_KEY = 'authToken'
 const DEFAULT_GOAL = '理解视频核心内容，提炼关键结论，并给出带时间戳的证据和可执行建议'
 const MAX_RECONNECT = 3
-const STAGES = [
-  ['VIDEO_CONTEXT', '解析语音与画面'],
-  ['RETRIEVAL', '检索相关证据'],
-  ['PLANNER', '拆解分析任务'],
-  ['EXECUTOR', '生成结构化结果'],
-  ['CRITIC', '核验结论与证据']
-]
+const STAGES = ANALYSIS_STAGES
 
 const $ = id => document.getElementById(id)
 const els = {
@@ -39,6 +34,7 @@ const els = {
 let onAuthExpired = () => {}
 let streamController = null
 let noticeTimer = null
+let lastProgressStage = null
 
 async function getToken() {
   const data = await chrome.storage.local.get(TOKEN_KEY)
@@ -168,6 +164,7 @@ function resetRunningView() {
   els.result.replaceChildren()
   els.result.className = ''
   els.backBtn.hidden = true
+  lastProgressStage = null
   markStages(null)
   setTopStatus('')
 }
@@ -238,7 +235,11 @@ async function consumeStream(body, onEvent, signal) {
 
 function handleTaskEvent(event) {
   const { state, stage, message, result } = event
-  if (stage) markStages(stage)
+  const progressStage = analysisStageOf(stage)
+  if (progressStage) {
+    lastProgressStage = progressStage
+    markStages(progressStage)
+  }
   if (state === 'COMPLETED') {
     for (const li of els.stageList.children) {
       li.classList.remove('active', 'failed')
@@ -250,12 +251,13 @@ function handleTaskEvent(event) {
       text: typeof result === 'string' ? result : JSON.stringify(result, null, 2)
     })
   } else if (state === 'FAILED') {
+    if (lastProgressStage) markStages(lastProgressStage, true)
     stopStream()
     finishRunning({ failed: true, text: message || '分析失败，请稍后重试' })
   } else {
     els.statusMessage.textContent = message
       || (state === 'QUEUED' ? '任务已受理，排队中…' : '分析进行中…')
-    const stageLabel = STAGES.find(([key]) => key === stage)?.[1]
+    const stageLabel = analysisStageLabelOf(stage)
     setTopStatus(stageLabel || '处理中…')
   }
 }

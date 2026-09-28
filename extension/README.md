@@ -9,14 +9,14 @@
 - 分析目标 + 模式（`AUTO` 先调 `/analysis/route` 让 AI 识别意图，失败回退通用模式）
 - SSE 实时阶段进度（解析语音与画面 → 检索证据 → 拆解任务 → 生成结果 → 核验），阶段以时间线呈现四态
 - 结果结构化渲染：结论/证据/建议等章节按卡片排版，「结果提示」单独做成警示条
-- 结果里的 `[00:30]` 时间戳可点击，跳转当前标签页到视频对应位置（当前页不是本次分析的视频时只提示、不跳转）
+- 结果里的 `[00:30]` 时间戳可点击，跳转当前标签页到视频对应位置（支持 B 站完整视频页与 YouTube；`b23.tv` 短链无法在本地还原视频 ID，只用于提交分析）
 - 401 自动回到登录态；SSE 断线指数退避重连最多 3 次
 
-暂不支持：网页端分片上传本地文件、追问、表格与嵌套列表的 Markdown 渲染。
+暂不支持：网页端分片上传本地文件、追问、`b23.tv` 短链时间戳跳转、表格与嵌套列表的 Markdown 渲染。
 
 ## 加载扩展
 
-1. 打开 `chrome://extensions`，右上角开启「开发者模式」
+1. 使用 Chrome 114 或更高版本，打开 `chrome://extensions`，右上角开启「开发者模式」
 2. 点「加载已解压的扩展程序」，选择本 `extension/` 目录
 3. 确保后端已启动（`./scripts/dev-up.sh` 后 `server/` 里 `./mvnw spring-boot:run`，健康检查 `curl http://localhost:9090/health`）
 4. 在 B 站/YouTube 视频页点工具栏里的 DoVideoAI 图标，侧边栏会自动预填链接
@@ -41,7 +41,10 @@ extension/
 ├── lib/
 │   ├── config.js       # API_BASE 常量
 │   ├── urlParser.js    # 站点识别（纯函数）
-│   └── sseParser.js    # SSE 增量分帧解析（纯函数）
+│   ├── sseParser.js    # SSE 增量分帧解析（纯函数）
+│   ├── stageProgress.js # 后端 TaskStage 到五阶段时间线的映射
+│   ├── markdown.js     # 安全 Markdown 解析（纯函数）
+│   └── markdownView.js # 使用 DOM API 渲染结果
 ├── tests/              # node:test 单测
 └── package.json        # {"type":"module"}，仅为让 node --test 跑 ESM
 ```
