@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "DoVideoAI",
+  "version": "0.1.0",
+  "description": "把当前页视频链接一键提交给 DoVideoAI Video Agent 分析",
+  "permissions": ["tabs", "sidePanel", "storage"],
+  "host_permissions": ["http://127.0.0.1:9090/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "DoVideoAI 视频分析"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  }
+}

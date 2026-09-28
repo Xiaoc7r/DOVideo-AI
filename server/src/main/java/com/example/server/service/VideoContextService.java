@@ -211,7 +211,9 @@ public class VideoContextService {
         runCommand(List.of(
                 "ffmpeg", "-y", "-i", videoPath,
                 "-vf", "select=eq(n\\,0)+gt(scene\\,0.35)+gte(t-prev_selected_t\\,30),showinfo",
-                "-vsync", "vfr",
+                // 用 -fps_mode 而非 -vsync：后者自 ffmpeg 5.0 起弃用、8.0 起移除，
+                // 在 ffmpeg 9 上会直接报 "Unrecognized option 'vsync'" 导致抽帧失败。
+                "-fps_mode", "vfr",
                 frameDir.resolve("frame_%06d.jpg").toString()
         ), timestamps);
 
