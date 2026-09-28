@@ -20,6 +20,12 @@
 
 致力于将长视频转化为可检索、可追溯、可继续追问的结构化知识。
 
+<div align="center">
+
+[![Star History Chart](https://star-history.dera.page/svg?repos=Xiaoc7r/DOVideo-AI&type=Date)](https://star-history.dera.page/#Xiaoc7r/DOVideo-AI&Date)
+
+</div>
+
 
 </div>
 
@@ -256,14 +262,3 @@ DoVideoAI
 ## License
 
 本项目基于 [MIT License](LICENSE) 开源。
-
-## ⭐ Star History
-
-> [!TIP]
-> 如果这个项目对你有一点帮助，或者你对它之后的发展感兴趣，欢迎顺手点个 Star，谢谢！
-
-<div align="center">
-
-[![Star History Chart](https://star-history.dera.page/svg?repos=Xiaoc7r/DOVideo-AI&type=Date)](https://star-history.dera.page/#Xiaoc7r/DOVideo-AI&Date)
-
-</div>
