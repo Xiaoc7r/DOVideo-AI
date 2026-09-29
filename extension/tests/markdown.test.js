@@ -35,6 +35,18 @@ test('toSeconds 兼容 mm:ss 与 h:mm:ss', () => {
   assert.equal(toSeconds('1:02:03'), 3723)
 })
 
+test('timestamps do not rewrite code or allow impossible seconds', () => {
+  const blocks = parseBlocks('```text\n[00:30]\n```\n\n`[00:30]` 与 [00:30]')
+  assert.equal(blocks[0].text, '[00:30]')
+  assert.deepEqual(blocks[1].tokens, [
+    { type: 'code', value: '[00:30]' },
+    { type: 'text', value: ' 与 ' },
+    { type: 'timestamp', seconds: 30, label: '00:30' }
+  ])
+  assert.equal(Number.isNaN(toSeconds('02:99')), true)
+  assert.equal(linkifyTimestamps('[02:99]'), '[02:99]')
+})
+
 test('linkifyTimestamps 把裸时间戳转成锚点链接', () => {
   assert.equal(linkifyTimestamps('[00:30] 现在在我手里的'), '[00:30](#video-t=30) 现在在我手里的')
 })

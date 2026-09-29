@@ -31,3 +31,30 @@ export function createSseFrameParser() {
 export function isTerminalTaskEvent(event) {
   return event?.state === 'COMPLETED' || event?.state === 'FAILED'
 }
+
+/** 消费到终态或取消；释放 reader 前取消流，避免结束后仍占用连接。 */
+export async function consumeTaskStream(body, onEvent, signal) {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  const parser = createSseFrameParser()
+  const cancel = () => reader.cancel().catch(() => {})
+  signal.addEventListener('abort', cancel, { once: true })
+  try {
+    while (!signal.aborted) {
+      const { value, done } = await reader.read()
+      if (signal.aborted) return false
+      const text = decoder.decode(value || new Uint8Array(), { stream: !done })
+      for (const event of parser.push(text)) {
+        if (signal.aborted) return false
+        await onEvent(event)
+        if (isTerminalTaskEvent(event)) return true
+      }
+      if (done) return false
+    }
+    return false
+  } finally {
+    signal.removeEventListener('abort', cancel)
+    await cancel()
+    reader.releaseLock()
+  }
+}

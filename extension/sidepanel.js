@@ -1,6 +1,6 @@
 import { API_BASE } from './lib/config.js'
-import { isValidHttpUrl, isSameVideo, parseVideoUrl, withTimestamp } from './lib/urlParser.js'
-import { createSseFrameParser, isTerminalTaskEvent } from './lib/sseParser.js'
+import { normalizeHttpUrl, isSameVideo, parseVideoUrl, withTimestamp } from './lib/urlParser.js'
+import { consumeTaskStream } from './lib/sseParser.js'
 import { renderResult } from './lib/markdownView.js'
 import { ANALYSIS_STAGES, analysisStageLabelOf, analysisStageOf } from './lib/stageProgress.js'
 
@@ -35,6 +35,8 @@ let onAuthExpired = () => {}
 let streamController = null
 let noticeTimer = null
 let lastProgressStage = null
+let operationVersion = 0
+let sourceVideoUrl = ''
 
 async function getToken() {
   const data = await chrome.storage.local.get(TOKEN_KEY)
@@ -85,7 +87,7 @@ async function apiRequest(path, options = {}) {
     if (error?.name === 'AbortError') throw error
     throw new Error(`无法连接后端服务（${API_BASE}），请先启动 server`, { cause: error })
   }
-  if (response.status === 401 && !path.startsWith('/user/')) {
+  if (response.status === 401 && token && token === await getToken() && !path.startsWith('/user/')) {
     await clearToken()
     onAuthExpired()
   }
@@ -106,7 +108,9 @@ async function apiRequest(path, options = {}) {
 async function requestJson(path, options) {
   const response = await apiRequest(path, options)
   if (!response.ok) {
-    throw new Error((await response.text()) || `请求失败（HTTP ${response.status}）`)
+    const error = new Error((await response.text()) || `请求失败（HTTP ${response.status}）`)
+    error.status = response.status
+    throw error
   }
   return response.json()
 }
@@ -162,7 +166,7 @@ function markStages(currentStage, failed = false) {
 function resetRunningView() {
   els.statusMessage.textContent = ''
   els.result.replaceChildren()
-  els.result.className = ''
+  els.result.className = 'result'
   els.backBtn.hidden = true
   lastProgressStage = null
   markStages(null)
@@ -186,7 +190,7 @@ function finishRunning({ failed, text }) {
   } else {
     els.result.append(renderResult(text, { onSeek: seekTo }))
   }
-  els.result.className = `visible${failed ? ' failed' : ''}`
+  els.result.className = `result visible${failed ? ' failed' : ''}`
   els.statusMessage.textContent = ''
   els.backBtn.hidden = false
   setBusy(false)
@@ -199,37 +203,20 @@ function finishRunning({ failed, text }) {
  * 在无关页面上做 t 参数跳转既无意义也可能覆盖用户正在看的内容。
  */
 async function seekTo(seconds) {
-  const source = els.videoUrl.value.trim()
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-  if (!tab?.url || !isSameVideo(tab.url, source)) {
-    showNotice('当前标签页不是本次分析的视频，无法跳转', true)
-    return
-  }
-  const target = withTimestamp(tab.url, seconds)
-  if (!target) {
-    showNotice('无法为该地址生成跳转链接', true)
-    return
-  }
-  await chrome.tabs.update(tab.id, { url: target })
-}
-
-async function consumeStream(body, onEvent, signal) {
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  const parser = createSseFrameParser()
   try {
-    while (!signal.aborted) {
-      const { value, done } = await reader.read()
-      const text = decoder.decode(value || new Uint8Array(), { stream: !done })
-      for (const event of parser.push(text)) {
-        await onEvent(event)
-        if (isTerminalTaskEvent(event)) return true
-      }
-      if (done) return false
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+    if (!tab?.url || !isSameVideo(tab.url, sourceVideoUrl)) {
+      showNotice('当前标签页不是本次分析的视频，无法跳转', true)
+      return
     }
-    return false
-  } finally {
-    reader.releaseLock()
+    const target = withTimestamp(tab.url, seconds)
+    if (!target) {
+      showNotice('无法为该地址生成跳转链接', true)
+      return
+    }
+    await chrome.tabs.update(tab.id, { url: target })
+  } catch {
+    showNotice('无法访问当前标签页，请重新打开视频页面后重试', true)
   }
 }
 
@@ -280,19 +267,25 @@ function startStream(mediaId, goal, mode) {
   stopStream()
   const controller = new AbortController()
   streamController = controller
+  const isActive = () => streamController === controller && !controller.signal.aborted
   let attempt = 0
   const params = new URLSearchParams({ id: String(mediaId), goal, mode })
 
   const run = async () => {
-    while (!controller.signal.aborted && attempt < MAX_RECONNECT) {
+    while (isActive() && attempt < MAX_RECONNECT) {
       try {
         const response = await apiRequest(`/analysis/analysis-events?${params}`, {
           headers: { Accept: 'text/event-stream' },
           signal: controller.signal
         })
+        if (!isActive()) {
+          await response.body?.cancel().catch(() => {})
+          return
+        }
         if (!response.ok) {
           const error = new Error(
             (await response.text()) || `事件流连接失败（HTTP ${response.status}）`)
+          if (!isActive()) return
           if (isTerminalStatus(response.status)) {
             finishRunning({ failed: true, text: error.message })
             return
@@ -300,21 +293,27 @@ function startStream(mediaId, goal, mode) {
           throw error
         }
         if (!response.body) throw new Error('服务端未返回事件流')
-        const terminal = await consumeStream(response.body, handleTaskEvent, controller.signal)
+        const terminal = await consumeTaskStream(response.body, event => {
+          if (!isActive()) return
+          attempt = 0
+          handleTaskEvent(event)
+        }, controller.signal)
         if (terminal) return
       } catch (error) {
-        if (controller.signal.aborted || error?.name === 'AbortError') return
+        if (!isActive() || error?.name === 'AbortError') return
       }
       const delay = Math.min(15000, 1000 * 2 ** attempt++)
       els.statusMessage.textContent = `连接中断，${Math.round(delay / 1000)} 秒后重连（第 ${attempt} 次）…`
       await sleep(delay, controller.signal)
     }
-    if (!controller.signal.aborted) {
+    if (isActive()) {
       finishRunning({ failed: true, text: '事件流多次重连失败，请稍后重新提交' })
     }
   }
 
-  run()
+  run().catch(error => {
+    if (isActive()) finishRunning({ failed: true, text: error.message || '任务连接异常，请稍后重试' })
+  })
 }
 
 async function prefillFromActiveTab() {
@@ -325,21 +324,31 @@ async function prefillFromActiveTab() {
 }
 
 async function enterReadyView({ silentPrefill = false } = {}) {
+  const version = operationVersion
+  const previousUrl = els.videoUrl.value
   showView('ready')
   if (!els.goal.value) els.goal.value = DEFAULT_GOAL
-  const url = await prefillFromActiveTab()
-  if (url) {
-    els.videoUrl.value = url
-    if (!silentPrefill) showNotice('已抓取当前页视频链接')
-  } else if (!silentPrefill) {
-    showNotice('未能识别当前页面的视频链接，请手动粘贴', true)
+  try {
+    const url = await prefillFromActiveTab()
+    if (version !== operationVersion || els.readyView.hidden || els.videoUrl.value !== previousUrl) return
+    if (url) {
+      els.videoUrl.value = url
+      if (!silentPrefill) showNotice('已抓取当前页视频链接')
+    } else if (!silentPrefill) {
+      showNotice('未能识别当前页面的视频链接，请手动粘贴', true)
+    }
+  } catch {
+    if (version === operationVersion && !silentPrefill) {
+      showNotice('无法读取当前标签页，请手动粘贴视频链接', true)
+    }
   }
 }
 
 async function submitAnalysis() {
-  const url = els.videoUrl.value.trim()
+  if (els.submitBtn.disabled) return
+  const url = normalizeHttpUrl(els.videoUrl.value)
   const goal = els.goal.value.trim()
-  if (!isValidHttpUrl(url)) {
+  if (!url) {
     showNotice('请填写合法的 http/https 视频链接', true)
     return
   }
@@ -347,6 +356,13 @@ async function submitAnalysis() {
     showNotice('请填写分析目标', true)
     return
   }
+  if (goal.length > 500) {
+    showNotice('分析目标不能超过 500 字', true)
+    return
+  }
+  const version = ++operationVersion
+  sourceVideoUrl = url
+  els.videoUrl.value = url
   setBusy(true)
   showView('running')
   resetRunningView()
@@ -356,6 +372,7 @@ async function submitAnalysis() {
     const form = new FormData()
     form.append('url', url)
     const media = await requestJson('/media/upload-url', { method: 'POST', body: form })
+    if (version !== operationVersion) return
     const mediaId = media?.id
     if (!mediaId) throw new Error('后端未返回视频 ID，无法提交分析')
 
@@ -369,15 +386,18 @@ async function submitAnalysis() {
           body: JSON.stringify({ goal })
         })
         mode = decision?.mode || 'GENERAL'
-      } catch {
+      } catch (error) {
+        if (version !== operationVersion || error.status === 401) return
         // 路由不可用时回退通用模式，不阻断分析（与 README 行为一致）。
         mode = 'GENERAL'
       }
     }
+    if (version !== operationVersion) return
 
     const params = new URLSearchParams({ id: String(mediaId), goal, mode })
     const response = await apiRequest(`/analysis/ai?${params}`, { method: 'POST' })
     const message = await response.text()
+    if (version !== operationVersion) return
     if (response.ok || response.status === 409) {
       // 202 受理 / 200 已有结果 / 409 同任务进行中，都通过 SSE 拿阶段与终态。
       els.statusMessage.textContent = '任务已提交，正在等待 Agent 流水线…'
@@ -388,6 +408,7 @@ async function submitAnalysis() {
       showNotice(message || '提交失败', true)
     }
   } catch (error) {
+    if (version !== operationVersion) return
     showView('ready')
     setBusy(false)
     showNotice(error.message || String(error), true)
@@ -396,6 +417,7 @@ async function submitAnalysis() {
 
 async function handleLogin(event) {
   event.preventDefault()
+  if (els.loginSubmit.disabled) return
   const username = els.loginUsername.value.trim()
   const password = els.loginPassword.value
   if (!username || !password) {
@@ -403,14 +425,17 @@ async function handleLogin(event) {
     return
   }
   setBusy(true)
+  const version = ++operationVersion
   try {
     const data = await requestJson('/user/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     })
+    if (version !== operationVersion) return
     if (!data?.token) throw new Error('登录接口未返回有效令牌')
     await setToken(data.token)
+    els.loginPassword.value = ''
     await enterReadyView({ silentPrefill: true })
   } catch (error) {
     showNotice(error.message || String(error), true)
@@ -422,6 +447,7 @@ async function handleLogin(event) {
 async function init() {
   renderStageList()
   onAuthExpired = () => {
+    operationVersion += 1
     stopStream()
     setBusy(false)
     showView('login')
@@ -432,6 +458,7 @@ async function init() {
   els.grabBtn.addEventListener('click', () => enterReadyView())
   els.submitBtn.addEventListener('click', submitAnalysis)
   els.backBtn.addEventListener('click', () => {
+    operationVersion += 1
     stopStream()
     setBusy(false)
     showView('ready')
@@ -444,4 +471,4 @@ async function init() {
   }
 }
 
-init()
+init().catch(error => showNotice(error.message || '初始化失败，请重新打开扩展', true))

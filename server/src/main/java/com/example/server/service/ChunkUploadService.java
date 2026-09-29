@@ -23,7 +23,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
 import java.util.HexFormat;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -97,6 +96,9 @@ public class ChunkUploadService {
         if (totalChunks != expectedChunks || chunkIndex < 0 || chunkIndex >= expectedChunks) {
             throw new IllegalArgumentException("invalid chunk index or totalChunks");
         }
+        // A response can be lost after merging. Late chunk retries must not recreate
+        // temporary objects for an upload that already has its final media record.
+        if (completedUpload(uploadId, userId) != null) return;
 
         try (InputStream inputStream = chunk.getInputStream()) {
             minioUtils.uploadObject(
@@ -147,8 +149,12 @@ public class ChunkUploadService {
                 MediaFile mediaFile = mediaService.saveUploadedMedia(
                         filename, fileUrl, userId, HexFormat.of().formatHex(digest.digest()));
                 // 先记成功再清现场。清理失败或客户端重试，都不会再插一条媒体记录。
+                // The receipt must outlive the resumable metadata, including the
+                // small time gap between these Redis calls near expiry.
                 redisTemplate.opsForValue().set(
-                        completedKey(uploadId), String.valueOf(mediaFile.getId()), 1, TimeUnit.DAYS);
+                        completedKey(uploadId), String.valueOf(mediaFile.getId()), 25, TimeUnit.HOURS);
+                redisTemplate.expire(uploadKey(uploadId), 1, TimeUnit.DAYS);
+                redisTemplate.expire(partsKey(uploadId), 1, TimeUnit.DAYS);
                 cleanup(uploadId, totalChunks, mediaFile.getId());
                 return mediaFile;
             } finally {
@@ -199,11 +205,9 @@ public class ChunkUploadService {
                         uploadId, i, mediaId, e);
             }
         }
-        try {
-            redisTemplate.delete(List.of(uploadKey(uploadId), partsKey(uploadId)));
-        } catch (RuntimeException e) {
-            log.warn("chunk_upload_metadata_cleanup_failed uploadId={} mediaId={}", uploadId, mediaId, e);
-        }
+        // Keep the small ownership metadata and part indexes until their TTL expires.
+        // A client that missed the successful response checks /upload-status first;
+        // deleting them would make it start over and insert a duplicate media record.
     }
 
     private MessageDigest md5Digest() {

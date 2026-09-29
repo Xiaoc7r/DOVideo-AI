@@ -1,5 +1,13 @@
 const API_BASE = (import.meta.env?.VITE_API_BASE_URL || '').replace(/\/$/, '')
 const TOKEN_KEY = 'authToken'
+let sessionRevision = 0
+
+/** Capture both local login changes and tokens changed by another tab. */
+export function captureAuthSession() {
+  const token = localStorage.getItem(TOKEN_KEY)
+  const revision = sessionRevision
+  return () => revision === sessionRevision && token === localStorage.getItem(TOKEN_KEY)
+}
 
 export function hasAuthToken() {
   return Boolean(localStorage.getItem(TOKEN_KEY))
@@ -8,10 +16,12 @@ export function hasAuthToken() {
 export function setAuthToken(token) {
   if (!token) throw new Error('登录接口未返回有效令牌')
   localStorage.setItem(TOKEN_KEY, token)
+  sessionRevision += 1
 }
 
 export function clearAuthToken() {
   localStorage.removeItem(TOKEN_KEY)
+  sessionRevision += 1
 }
 
 /**
@@ -63,6 +73,7 @@ function unwrap(response, envelope) {
 export async function apiRequest(path, options = {}) {
   const headers = new Headers(options.headers || {})
   const token = localStorage.getItem(TOKEN_KEY)
+  const isCurrentSession = captureAuthSession()
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
   let response
@@ -72,7 +83,7 @@ export async function apiRequest(path, options = {}) {
     if (error?.name === 'AbortError') throw error
     throw new Error('无法连接后端服务，请确认后端已启动且地址配置正确', { cause: error })
   }
-  if (response.status === 401 && !path.startsWith('/user/')) {
+  if (response.status === 401 && token && isCurrentSession() && !path.startsWith('/user/')) {
     clearAuthToken()
     window.dispatchEvent(new Event('auth-expired'))
   }

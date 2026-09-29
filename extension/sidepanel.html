@@ -12,7 +12,7 @@
     <span id="top-status" class="top-status"></span>
   </header>
 
-  <div id="notice" class="notice" hidden></div>
+  <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
 
   <main class="panel">
     <section id="login-view" hidden>
@@ -36,7 +36,7 @@
       </label>
       <button id="grab-btn" type="button" class="ghost">抓取当前页链接</button>
       <label class="field">分析目标
-        <textarea id="goal" rows="3"></textarea>
+        <textarea id="goal" rows="3" maxlength="500"></textarea>
       </label>
       <label class="field">分析模式
         <select id="mode">
@@ -53,7 +53,7 @@
     <section id="running-view" hidden>
       <h2 class="view-title">分析进度</h2>
       <ol id="stage-list" class="stages"></ol>
-      <p id="status-message" class="status"></p>
+      <p id="status-message" class="status" role="status" aria-live="polite"></p>
       <!-- 渲染后的结果容器：由 markdownView.js 用 createElement 填充，不经过 innerHTML -->
       <div id="result" class="result"></div>
       <button id="back-btn" type="button" class="ghost" hidden>返回</button>
