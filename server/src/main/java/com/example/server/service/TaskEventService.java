@@ -57,7 +57,14 @@ public class TaskEventService implements MessageListener {
                                 TaskStage stage) {
         String key = key(mediaId, type, goal, mode);
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
-        subscribers.computeIfAbsent(key, ignored -> new CopyOnWriteArrayList<>()).add(emitter);
+        // Registration and removal must use the same per-key map operation. Otherwise the last
+        // disconnect can remove an empty list between computeIfAbsent and add, orphaning this stream.
+        subscribers.compute(key, (ignored, emitters) -> {
+            CopyOnWriteArrayList<SseEmitter> current =
+                    emitters == null ? new CopyOnWriteArrayList<>() : emitters;
+            current.add(emitter);
+            return current;
+        });
         emitter.onCompletion(() -> remove(key, emitter));
         emitter.onTimeout(() -> remove(key, emitter));
         emitter.onError(error -> remove(key, emitter));

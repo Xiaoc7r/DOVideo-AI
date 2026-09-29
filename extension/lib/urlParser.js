@@ -55,8 +55,12 @@ export function parseVideoUrl(rawUrl) {
  * 不做站点白名单限制。
  */
 export function isValidHttpUrl(rawUrl) {
-  const url = toUrl(rawUrl)
-  return url !== null && (url.protocol === 'http:' || url.protocol === 'https:')
+  return normalizeHttpUrl(rawUrl) !== null
+}
+
+/** 校验与提交使用同一个规范化结果，避免无协议链接通过校验后仍以原文提交。 */
+export function normalizeHttpUrl(rawUrl) {
+  return toUrl(rawUrl)?.href ?? null
 }
 
 /**
@@ -70,11 +74,17 @@ export function videoKey(rawUrl) {
 
   if (BILI_HOST.test(url.hostname)) {
     if (url.hostname.endsWith('b23.tv')) return null
-    const match = /^\/video\/(BV[\w]+)/i.exec(url.pathname)
-    return match ? `bilibili:${match[1].toUpperCase()}` : null
+    const match = /^\/video\/((?:BV[\w]+)|(?:av\d+))\/?$/i.exec(url.pathname)
+    const part = Number(url.searchParams.get('p') || 1)
+    if (!match || !Number.isSafeInteger(part) || part < 1) return null
+    // BV 编码大小写敏感，且分 P 对应不同视频内容；只忽略追踪/时间参数。
+    const id = match[1].slice(0, 2).toLowerCase() + match[1].slice(2)
+    return `bilibili:${id}:p${part}`
   }
   if (YOUTUBE_HOST.test(url.hostname)) {
-    const id = url.searchParams.get('v') || /^\/(?:shorts|live|embed)\/([\w-]+)/.exec(url.pathname)?.[1]
+    const id = url.pathname === '/watch'
+      ? url.searchParams.get('v')
+      : /^\/(?:shorts|live|embed)\/([\w-]+)\/?$/.exec(url.pathname)?.[1]
     return id ? `youtube:${id}` : null
   }
   if (url.hostname === 'youtu.be') {
@@ -96,7 +106,7 @@ export function isSameVideo(left, right) {
  */
 export function withTimestamp(rawUrl, seconds) {
   const url = toUrl(rawUrl)
-  if (!url) return null
+  if (!url || !Number.isFinite(seconds) || Math.abs(seconds) > Number.MAX_SAFE_INTEGER) return null
   const offset = Math.max(0, Math.floor(seconds))
   const needsUnit = YOUTUBE_HOST.test(url.hostname) || url.hostname === 'youtu.be'
   url.searchParams.set('t', needsUnit ? `${offset}s` : String(offset))

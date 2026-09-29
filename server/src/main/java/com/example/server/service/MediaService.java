@@ -168,17 +168,22 @@ public class MediaService {
         } catch (RuntimeException e) {
             log.warn("media_evidence_manifest_read_failed mediaId={}", mediaId, e);
         }
-        videoContextService.deleteEvidenceFrames(context);
-        try {
-            redisTemplate.delete(List.of(
+        VideoContext evidenceContext = context;
+        cleanupArtifact(mediaId, "evidence_frames", () -> videoContextService.deleteEvidenceFrames(evidenceContext));
+        cleanupArtifact(mediaId, "redis", () -> redisTemplate.delete(List.of(
                     MEDIA_MD5_KEY_PREFIX + mediaId,
                     "transcription:active:" + mediaId,
-                    "transcription:state:" + mediaId));
-            checkpointService.deleteMedia(mediaId);
-            telemetry.deleteTask(mediaId);
-            vectorStore.deleteMedia(mediaId);
+                    "transcription:state:" + mediaId)));
+        cleanupArtifact(mediaId, "checkpoints", () -> checkpointService.deleteMedia(mediaId));
+        cleanupArtifact(mediaId, "telemetry", () -> telemetry.deleteTask(mediaId));
+        cleanupArtifact(mediaId, "vectors", () -> vectorStore.deleteMedia(mediaId));
+    }
+
+    private void cleanupArtifact(Long mediaId, String artifact, Runnable cleanup) {
+        try {
+            cleanup.run();
         } catch (RuntimeException e) {
-            log.warn("media_runtime_cleanup_failed mediaId={}", mediaId, e);
+            log.warn("media_runtime_cleanup_failed mediaId={} artifact={}", mediaId, artifact, e);
         }
     }
 

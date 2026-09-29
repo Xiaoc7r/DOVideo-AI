@@ -118,6 +118,14 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
                     TaskStage.CONSUMING);
             if (msg.isRevision()) {
                 if (!checkpointService.beginStagedRevision(mediaId, msg.getUserGoal(), mode)) {
+                    // The revision marker is removed after success. A broker redelivery after
+                    // that point must acknowledge the saved result instead of retrying forever.
+                    AgentState completed = checkpointService.loadResult(mediaId, msg.getUserGoal(), mode);
+                    if (completed != null && completed.result() != null) {
+                        taskEventService.publishAnalysis(mediaId, msg.getUserGoal(), mode,
+                                TaskStatus.completed(completed), TaskStage.COMPLETED);
+                        return;
+                    }
                     throw new IllegalStateException("修订任务状态不存在，等待消息队列重试");
                 }
                 redisTemplate.delete(completedKey);
@@ -204,9 +212,16 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
             throw new IllegalStateException("视频分析消费失败", e);
         } finally {
             if (acquired) {
-                if (!retrying) redisTemplate.delete(java.util.List.of(activeKey, attemptsKey));
-                if (lock.isHeldByCurrentThread()) {
-                    lock.unlock();
+                try {
+                    if (!retrying) redisTemplate.delete(java.util.List.of(activeKey, attemptsKey));
+                } catch (RuntimeException cleanupError) {
+                    // A transient cache failure must not skip unlock: the watchdog would keep
+                    // renewing this lock and prevent later consumers from making progress.
+                    log.warn("video_analysis_active_cleanup_failed mediaId={}", mediaId, cleanupError);
+                } finally {
+                    if (lock.isHeldByCurrentThread()) {
+                        lock.unlock();
+                    }
                 }
             }
         }

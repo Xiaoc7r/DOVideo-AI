@@ -1,5 +1,6 @@
 package com.example.server.service;
 
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.example.server.dto.AgentFeedback;
 import com.example.server.dto.AgentState;
 import com.example.server.dto.AnalysisMode;
@@ -110,13 +111,12 @@ public class AiService {
             // 因此这里带 mode 读取,不会误取别的模式已完成的结果。
             AgentState agentState = checkpointService.loadResult(mediaId, userGoal, resolvedMode);
             if (agentState != null && agentState.result() != null) {
-                persistResult(mediaFile, agentState);
+                persistResult(mediaFile, agentState, null);
                 telemetry.increment(traceId, "checkpointHits", 1);
                 return;
             }
 
             VideoContext videoContext = resolveContext(mediaFile, userGoal, traceId, resolvedMode);
-            mediaFile.setTranscriptText(videoContext.transcriptText());
             currentStage = TaskStage.AGENT_LOOP;
             taskEventService.publishAnalysis(mediaId, userGoal, resolvedMode,
                     TaskStatus.of(TaskStatus.State.PROCESSING, "多模态上下文已就绪，Agent 开始分析"),
@@ -129,7 +129,7 @@ public class AiService {
                 telemetry.stage(traceId, TaskStage.AGENT_LOOP.name(), agentStarted, false);
                 throw e;
             }
-            persistResult(mediaFile, agentState);
+            persistResult(mediaFile, agentState, videoContext.transcriptText());
             log.info("agent_analysis_completed traceId={} mediaId={} rounds={}",
                     traceId, mediaId, agentState.round());
         } catch (Exception e) {
@@ -388,7 +388,7 @@ public class AiService {
         checkpointService.saveContext(mediaId, reusableContext(mediaFile.getFilePath(), sourceContext));
         checkpointService.saveResult(mediaId, new AgentState(
                 state.goal(), state.plan(), state.result(), state.critique(), state.round()), mode);
-        persistResult(mediaFile, state);
+        persistResult(mediaFile, state, null);
         return true;
     }
 
@@ -532,10 +532,22 @@ public class AiService {
         return sb.toString();
     }
 
-    private void persistResult(MediaFile mediaFile, AgentState agentState) {
+    private void persistResult(MediaFile mediaFile, AgentState agentState, String transcript) {
         if (agentState.result() == null) throw new IllegalStateException("Agent 未生成分析结果");
-        mediaFile.setAiSummary(agentState.result().toMarkdown());
-        mediaFileMapper.updateById(mediaFile);
+        MediaFile update = new MediaFile();
+        update.setId(mediaFile.getId());
+        update.setAiSummary(agentState.result().toMarkdown());
+        // Do not write back the stale transcript loaded before the long-running analysis.
+        mediaFileMapper.updateById(update);
+        // Preserve the existing analysis-to-transcript behavior without overwriting
+        // a separate transcription that completed while the Agent was running.
+        if (transcript != null && !transcript.isBlank()) {
+            MediaFile transcriptUpdate = new MediaFile();
+            transcriptUpdate.setTranscriptText(transcript);
+            mediaFileMapper.update(transcriptUpdate, new UpdateWrapper<MediaFile>()
+                    .eq("id", mediaFile.getId())
+                    .and(query -> query.isNull("transcript_text").or().eq("transcript_text", "")));
+        }
         mediaService.invalidateUserList(mediaFile.getUserId());
     }
 }

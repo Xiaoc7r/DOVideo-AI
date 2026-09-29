@@ -1,6 +1,39 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createSseFrameParser, isTerminalTaskEvent } from '../lib/sseParser.js'
+import { createSseFrameParser, isTerminalTaskEvent, consumeTaskStream } from '../lib/sseParser.js'
+
+test('cancellation discards buffered events and releases the transport', async () => {
+  const controller = new AbortController()
+  let cancelled = false
+  const body = new ReadableStream({
+    start(stream) {
+      stream.enqueue(new TextEncoder().encode(
+        'data: {"state":"PROCESSING"}\n\ndata: {"state":"COMPLETED"}\n\n'))
+    },
+    cancel() { cancelled = true }
+  })
+  const received = []
+  await consumeTaskStream(body, event => {
+    received.push(event.state)
+    controller.abort()
+  }, controller.signal)
+  assert.deepEqual(received, ['PROCESSING'])
+  assert.equal(cancelled, true)
+  assert.equal(body.locked, false)
+})
+
+test('terminal completion cancels a stream even when the server leaves it open', async () => {
+  let cancelled = false
+  const body = new ReadableStream({
+    start(stream) {
+      stream.enqueue(new TextEncoder().encode('data: {"state":"COMPLETED"}\n\n'))
+    },
+    cancel() { cancelled = true }
+  })
+  assert.equal(await consumeTaskStream(body, () => {}, new AbortController().signal), true)
+  assert.equal(cancelled, true)
+  assert.equal(body.locked, false)
+})
 
 const encoder = new TextEncoder()
 const toStream = text => new ReadableStream({

@@ -1,4 +1,4 @@
-import { apiRequest } from './api.js'
+import { apiRequest, captureAuthSession } from './api.js'
 import { isTerminalStatus } from './taskEventsPolicy.js'
 
 /**
@@ -43,9 +43,12 @@ export function createTaskStreams({ onActiveChange = () => {} } = {}) {
     stop(id, type, scope)
     const key = keyOf(id, type, scope)
     const controller = new AbortController()
+    const isCurrentSession = captureAuthSession()
     streams.set(key, { controller, id, type, scope })
     publish()
     let reconnectAttempt = 0
+    const isActive = () => !controller.signal.aborted
+      && streams.get(key)?.controller === controller && isCurrentSession()
 
     const release = () => {
       if (streams.get(key)?.controller !== controller) return
@@ -54,16 +57,22 @@ export function createTaskStreams({ onActiveChange = () => {} } = {}) {
     }
 
     const run = async () => {
-      while (!controller.signal.aborted && streams.get(key)?.controller === controller) {
+      while (isActive()) {
         try {
           const response = await apiRequest(path, {
             headers: { Accept: 'text/event-stream' },
             signal: controller.signal
           })
+          if (!isActive()) {
+            await response.body?.cancel().catch(() => {})
+            release()
+            return
+          }
           if (!response.ok) {
             const error = new Error(
               (await response.text()) || `事件流连接失败（HTTP ${response.status}）`)
             error.status = response.status
+            if (!isActive()) return
             // 目标不存在、无权访问、参数非法这类错误不会自愈，继续重连只是空转，
             // 还会让界面永远停在“重连中”。直接释放连接并告知调用方这是终态。
             if (isTerminalStatus(response.status)) {
@@ -75,24 +84,26 @@ export function createTaskStreams({ onActiveChange = () => {} } = {}) {
           }
           if (!response.body) throw new Error('服务端未返回事件流')
           const terminal = await consumeStream(response.body, async event => {
+            if (!isActive()) return
             reconnectAttempt = 0
-            await onEvent(event)
+            await onEvent(event, controller.signal)
           }, controller.signal)
           if (terminal) {
             release()
             return
           }
         } catch (error) {
-          if (controller.signal.aborted) return
+          if (!isActive()) { release(); return }
           onError?.(error, reconnectAttempt + 1)
         }
         const delay = Math.min(15_000, 1_000 * 2 ** reconnectAttempt++)
         await waitForRetry(delay, controller.signal)
       }
+      release()
     }
 
     run().catch(error => {
-      if (controller.signal.aborted) return
+      if (!isActive()) { release(); return }
       // 走到这里说明重连循环本身异常退出，连接不会再恢复，同样按终态通知。
       release()
       onError?.(error, reconnectAttempt + 1, true)
@@ -127,13 +138,17 @@ async function consumeStream(body, onEvent, signal) {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  const cancel = () => { reader.cancel().catch(() => {}) }
+  signal.addEventListener('abort', cancel, { once: true })
   try {
     while (!signal.aborted) {
       const { value, done } = await reader.read()
+      if (signal.aborted) return false
       buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
       const frames = buffer.split(/\r?\n\r?\n/)
       buffer = frames.pop() || ''
       for (const frame of frames) {
+        if (signal.aborted) return false
         const data = frame.split(/\r?\n/)
           .filter(line => line.startsWith('data:'))
           .map(line => line.slice(5).trimStart())
@@ -147,6 +162,8 @@ async function consumeStream(body, onEvent, signal) {
     }
     return false
   } finally {
+    signal.removeEventListener('abort', cancel)
+    await reader.cancel().catch(() => {})
     reader.releaseLock()
   }
 }

@@ -162,8 +162,10 @@ public class AnalysisController {
         ensureRating(feedback);
         MediaFile mediaFile = mediaService.requireOwnedMedia(feedback.mediaId(), userId);
         String revisedGoal = aiService.revisionGoal(feedback);
+        AnalysisMode analysisMode = AnalysisMode.fromRequest(
+                mode == null || mode.isBlank() ? feedback.mode() : mode);
         return submissionResponse(
-                dispatchService.submit(mediaFile, revisedGoal, feedback, AnalysisMode.fromRequest(mode)));
+                dispatchService.submit(mediaFile, revisedGoal, feedback, analysisMode));
     }
 
     @GetMapping("/agent-feedback")

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { isSameVideo, isValidHttpUrl, parseVideoUrl, videoKey, withTimestamp } from '../lib/urlParser.js'
+import { isSameVideo, isValidHttpUrl, normalizeHttpUrl, parseVideoUrl, videoKey, withTimestamp } from '../lib/urlParser.js'
 
 test('识别 B 站视频页并保留查询参数', () => {
   const parsed = parseVideoUrl('https://www.bilibili.com/video/BV1xx411c7mD?p=2&spm_id_from=333')
@@ -62,12 +62,27 @@ test('手动粘贴兜底只校验 http/https 合法性', () => {
 test('videoKey 忽略查询参数差异，归一同一视频', () => {
   assert.equal(
     videoKey('https://www.bilibili.com/video/BV1xx411c7mD?spm_id_from=333.1007'),
-    videoKey('https://www.bilibili.com/video/bv1xx411c7md')
+    videoKey('https://www.bilibili.com/video/BV1xx411c7mD?p=1')
   )
   assert.equal(
     videoKey('https://www.youtube.com/watch?v=dQw4w9WgXcQ'),
     videoKey('https://youtu.be/dQw4w9WgXcQ')
   )
+})
+
+test('Bilibili identity distinguishes parts and preserves the case-sensitive video ID', () => {
+  const base = 'https://www.bilibili.com/video/BV1xx411c7mD'
+  assert.equal(isSameVideo(base, `${base}?p=2`), false)
+  assert.equal(isSameVideo(`${base}?p=2`, `${base}?p=2&t=30`), true)
+  assert.equal(isSameVideo(base, base.replace('mD', 'md')), false)
+  assert.equal(videoKey(`${base}?p=NaN`), null)
+})
+
+test('manual URLs are normalized before being submitted', () => {
+  assert.equal(normalizeHttpUrl('  vimeo.com/76979871  '), 'https://vimeo.com/76979871')
+  assert.equal(normalizeHttpUrl('ftp://example.com/video'), null)
+  assert.equal(withTimestamp('https://youtu.be/abc', NaN), null)
+  assert.equal(withTimestamp('https://youtu.be/abc', Infinity), null)
 })
 
 test('videoKey 对短链与未知站点返回 null，交由调用方拒绝操作', () => {

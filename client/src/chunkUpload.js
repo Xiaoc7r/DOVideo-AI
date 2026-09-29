@@ -1,4 +1,4 @@
-import { apiRequest } from './api'
+import { apiRequest } from './api.js'
 
 const CHUNK_SIZE = 5 * 1024 * 1024
 const UPLOAD_CONCURRENCY = 3
@@ -45,6 +45,9 @@ export function formatDurationText(seconds) {
 /** 选择文件时的前置校验，避免进入上传态之后才失败。 */
 export function validateVideoFile(file) {
   if (!file) return '请先选择视频文件'
+  if (!/\.(mp4|mov|mkv|avi|webm|m4v)$/i.test(file.name || '')) {
+    return '仅支持 MP4、MOV、MKV、AVI、WEBM 和 M4V 视频'
+  }
   if (!file.size) return '该文件大小为 0，可能已损坏或仍在同步，请重新选择'
   if (file.size > MAX_UPLOAD_BYTES) {
     return `文件 ${formatBytes(file.size)}，超过 ${formatBytes(MAX_UPLOAD_BYTES)} 上限，请先压缩或分段`
@@ -52,38 +55,52 @@ export function validateVideoFile(file) {
   return ''
 }
 
-function storageKey(file) {
+function storageKey(file, userId) {
+  return `upload:${userId ?? 'anonymous'}:${file.name}:${file.size}:${file.lastModified}`
+}
+
+function legacyStorageKey(file) {
   return `upload:${file.name}:${file.size}:${file.lastModified}`
 }
 
-function readStoredUploadId(file) {
+function readLegacyUploadId(file) {
+  try { return localStorage.getItem(legacyStorageKey(file)) } catch { return null }
+}
+
+function forgetLegacyUpload(file) {
+  try { localStorage.removeItem(legacyStorageKey(file)) } catch { /* Storage is optional. */ }
+}
+
+function readStoredUploadId(file, userId) {
   try {
-    return localStorage.getItem(storageKey(file))
+    return localStorage.getItem(storageKey(file, userId))
   } catch {
     // 隐私模式下 localStorage 可能不可用，此时退化为普通上传。
     return null
   }
 }
 
-function writeStoredUploadId(file, uploadId) {
+function writeStoredUploadId(file, uploadId, userId) {
   try {
-    localStorage.setItem(storageKey(file), uploadId)
+    localStorage.setItem(storageKey(file, userId), uploadId)
+    return true
   } catch {
     // 存不下续传凭据不影响本次上传，只是失败后无法续传。
+    return false
   }
 }
 
-export function forgetUploadProgress(file) {
+export function forgetUploadProgress(file, userId) {
   if (!file) return
   try {
-    localStorage.removeItem(storageKey(file))
+    localStorage.removeItem(storageKey(file, userId))
   } catch {
     // 同上，忽略存储不可用。
   }
 }
 
-export function hasUploadProgress(file) {
-  return Boolean(file && readStoredUploadId(file))
+export function hasUploadProgress(file, userId) {
+  return Boolean(file && readStoredUploadId(file, userId))
 }
 
 /**
@@ -92,14 +109,14 @@ export function hasUploadProgress(file) {
  * - 支持 AbortSignal 取消；取消后保留续传凭据，便于用户继续。
  * - onProgress 携带字节级进度、实时速度与预计剩余时间。
  */
-export async function uploadVideoInChunks(file, onProgress = () => {}, signal) {
+export async function uploadVideoInChunks(file, onProgress = () => {}, signal, userId) {
   const invalid = validateVideoFile(file)
   if (invalid) throw new Error(invalid)
   throwIfAborted(signal)
 
   const totalBytes = file.size
   const totalChunks = Math.ceil(totalBytes / CHUNK_SIZE)
-  const { uploadId, uploadedChunks } = await resolveUploadSession(file, totalChunks, signal)
+  const { uploadId, uploadedChunks } = await resolveUploadSession(file, totalChunks, signal, userId)
 
   const pendingChunks = []
   let uploadedBytes = 0
@@ -175,7 +192,7 @@ export async function uploadVideoInChunks(file, onProgress = () => {}, signal) {
 
   emit('merging')
   const params = new URLSearchParams({ uploadId })
-  const response = await apiRequest(`/media/complete-upload?${params}`, {
+  const response = await uploadRequest(`/media/complete-upload?${params}`, {
     method: 'POST',
     signal
   })
@@ -184,7 +201,7 @@ export async function uploadVideoInChunks(file, onProgress = () => {}, signal) {
     throw new Error(await readErrorText(response) || '分片合并失败，可重新选择同一文件继续')
   }
   const media = await response.json()
-  forgetUploadProgress(file)
+  forgetUploadProgress(file, userId)
   return media
 }
 
@@ -201,13 +218,15 @@ function isDeadUploadSession(status, detail) {
     || text.includes('invalid uploadid')
 }
 
-async function resolveUploadSession(file, totalChunks, signal) {
-  const storedUploadId = readStoredUploadId(file)
+async function resolveUploadSession(file, totalChunks, signal, userId) {
+  const scopedUploadId = readStoredUploadId(file, userId)
+  const legacyUploadId = scopedUploadId ? null : readLegacyUploadId(file)
+  const storedUploadId = scopedUploadId || legacyUploadId
   if (storedUploadId) {
     let response
     try {
       const params = new URLSearchParams({ uploadId: storedUploadId })
-      response = await apiRequest(`/media/upload-status?${params}`, { signal })
+      response = await uploadRequest(`/media/upload-status?${params}`, { signal })
     } catch (error) {
       if (isAbortError(error, signal)) throw new UploadAbortedError()
       // 断网/超时意味着“进度未知”，而不是“进度失效”。此时必须保留凭据并中断本次上传，
@@ -217,6 +236,11 @@ async function resolveUploadSession(file, totalChunks, signal) {
 
     if (response.ok) {
       const indexes = await response.json()
+      throwIfAborted(signal)
+      // Only migrate old, unscoped progress after the server has verified ownership.
+      if (legacyUploadId) {
+        if (writeStoredUploadId(file, storedUploadId, userId)) forgetLegacyUpload(file)
+      }
       const uploadedChunks = new Set((Array.isArray(indexes) ? indexes : [])
         .map(Number)
         .filter(index => Number.isInteger(index) && index >= 0 && index < totalChunks))
@@ -224,24 +248,31 @@ async function resolveUploadSession(file, totalChunks, signal) {
     }
 
     const detail = await readErrorText(response)
-    if (!isDeadUploadSession(response.status, detail)) {
+    const belongsToAnotherUser = Boolean(legacyUploadId) && response.status === 403
+    if (!belongsToAnotherUser && !isDeadUploadSession(response.status, detail)) {
       // 401 / 403 / 429 / 5xx：凭据本身可能仍然有效，一律保留，交由用户稍后重试。
       const error = new Error(detail
         || `暂时无法确认上传进度（HTTP ${response.status}）。续传进度已保留，请稍后继续上传`)
       error.status = response.status
       throw error
     }
-    forgetUploadProgress(file)
+    if (legacyUploadId) {
+      // Leave another account's legacy progress available for that account.
+      if (!belongsToAnotherUser) forgetLegacyUpload(file)
+    } else {
+      forgetUploadProgress(file, userId)
+    }
   }
 
   const uploadId = await initializeUpload(file.name, totalChunks, signal)
-  writeStoredUploadId(file, uploadId)
+  throwIfAborted(signal)
+  writeStoredUploadId(file, uploadId, userId)
   return { uploadId, uploadedChunks: new Set() }
 }
 
 async function initializeUpload(filename, totalChunks, signal) {
   const params = new URLSearchParams({ filename, totalChunks: String(totalChunks) })
-  const response = await apiRequest(`/media/init-upload?${params}`, {
+  const response = await uploadRequest(`/media/init-upload?${params}`, {
     method: 'POST',
     signal
   })
@@ -278,7 +309,7 @@ async function uploadChunk(file, uploadId, chunkIndex, totalChunks, signal) {
   formData.append('totalChunks', String(totalChunks))
   formData.append('file', file.slice(start, end))
 
-  const response = await apiRequest('/media/upload-chunk', {
+  const response = await uploadRequest('/media/upload-chunk', {
     method: 'POST',
     body: formData,
     signal
@@ -348,6 +379,15 @@ function throwIfAborted(signal) {
 
 function isAbortError(error, signal) {
   return Boolean(signal?.aborted) || error?.name === 'AbortError' || error?.aborted === true
+}
+
+async function uploadRequest(path, options) {
+  try {
+    return await apiRequest(path, options)
+  } catch (error) {
+    if (isAbortError(error, options.signal)) throw new UploadAbortedError()
+    throw error
+  }
 }
 
 function sleep(ms, signal) {

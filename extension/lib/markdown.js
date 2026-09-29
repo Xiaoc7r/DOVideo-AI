@@ -19,7 +19,7 @@ const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/
 const ORDERED_ITEM = /^\s*\d+[.)]\s+/
 const HORIZONTAL_RULE = /^(?:-{3,}|\*{3,}|_{3,})$/
 // 顺序敏感：** 必须排在 * 之前，否则粗体会被当成两个斜体。
-const INLINE = /(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)|(\[([^\]]*)\]\(([^)\s]+)\))/g
+const INLINE = /(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)|(\[([^\]]*)\]\(([^)\s]+)\))|(\[((?:\d{1,2}:)?\d{1,2}:\d{2})\](?!\())/g
 
 /** 剔除模型可能带出的 <think> 推理残留；若整段都是推理，则回退原文避免结果为空。 */
 export function stripThink(markdown) {
@@ -33,15 +33,22 @@ export function stripThink(markdown) {
 
 /** [00:30] → [00:30](#video-t=30)，沿用网页端既有约定，渲染层据此产出时间戳胶囊。 */
 export function linkifyTimestamps(markdown) {
-  return String(markdown ?? '').replace(BARE_TIMESTAMP, (_, label) => `[${label}](#video-t=${toSeconds(label)})`)
+  return String(markdown ?? '').replace(BARE_TIMESTAMP, (match, label) => {
+    const seconds = toSeconds(label)
+    return Number.isFinite(seconds) ? `[${label}](#video-t=${seconds})` : match
+  })
 }
 
 /** 时间戳标签转秒数，兼容 mm:ss 与 h:mm:ss 两种写法。 */
 export function toSeconds(label) {
-  const parts = String(label).split(':').map(Number)
-  return parts.length === 3
+  const value = String(label)
+  if (!/^(?:\d+:)?\d+:\d{2}$/.test(value)) return NaN
+  const parts = value.split(':').map(Number)
+  if (parts.at(-1) >= 60 || (parts.length === 3 && parts[1] >= 60)) return NaN
+  const seconds = parts.length === 3
     ? parts[0] * 3600 + parts[1] * 60 + parts[2]
     : parts[0] * 60 + parts[1]
+  return Number.isSafeInteger(seconds) ? seconds : NaN
 }
 
 /** 行内元素解析。返回扁平的 token 数组，不做嵌套（后端产物用不到）。 */
@@ -60,19 +67,26 @@ export function parseInline(text) {
 }
 
 function inlineTokenOf(match) {
-  const [, , strong, , emphasis, , code, , label, href] = match
+  const [, , strong, , emphasis, , code, , label, href, bareTimestamp, bareLabel] = match
   if (strong !== undefined) return { type: 'strong', value: strong }
   if (emphasis !== undefined) return { type: 'em', value: emphasis }
   if (code !== undefined) return { type: 'code', value: code }
+  if (bareTimestamp !== undefined) {
+    const seconds = toSeconds(bareLabel)
+    return Number.isFinite(seconds)
+      ? { type: 'timestamp', seconds, label: bareLabel }
+      : { type: 'text', value: bareTimestamp }
+  }
   const timestamp = TIMESTAMP_HREF.exec(href || '')
-  return timestamp
+  return timestamp && Number.isSafeInteger(Number(timestamp[1]))
     ? { type: 'timestamp', seconds: Number(timestamp[1]), label }
     : { type: 'link', href, label }
 }
 
 /** 文档级解析：把 Markdown 切成块数组。支持标题、列表、引用、围栏代码、水平线与段落。 */
 export function parseBlocks(markdown) {
-  const lines = linkifyTimestamps(stripThink(markdown)).split(/\r?\n/)
+  // 时间戳由行内解析处理，围栏/行内代码中的原文不应被改写。
+  const lines = stripThink(markdown).split(/\r?\n/)
   const blocks = []
   let index = 0
 

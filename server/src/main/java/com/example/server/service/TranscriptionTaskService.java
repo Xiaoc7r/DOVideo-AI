@@ -47,23 +47,24 @@ public class TranscriptionTaskService {
 
     @Async("aiTaskExecutor")
     public void transcribe(Long mediaId) {
-        MediaFile mediaFile = mediaFileMapper.selectById(mediaId);
-        if (mediaFile == null) {
-            clearActive(mediaId);
-            return;
-        }
-
         try {
+            MediaFile mediaFile = mediaFileMapper.selectById(mediaId);
+            if (mediaFile == null) return;
             setState(mediaId, TaskStatus.State.PROCESSING, ACTIVE_TTL);
             taskEventService.publishTranscription(mediaId,
                     TaskStatus.of(TaskStatus.State.PROCESSING, "正在识别视频语音"), TaskStage.ASR);
-            mediaFile.setTranscriptText(videoTranscriptionService.transcribe(
-                    mediaService.readableSource(mediaFile.getFilePath())));
-            mediaFileMapper.updateById(mediaFile);
+            String transcript = videoTranscriptionService.transcribe(
+                    mediaService.readableSource(mediaFile.getFilePath()));
+            MediaFile update = new MediaFile();
+            update.setId(mediaId);
+            update.setTranscriptText(transcript);
+            // Analysis can finish while ASR is running. Update only the transcript so an older
+            // MediaFile snapshot cannot overwrite the newly saved AI result or other fields.
+            if (mediaFileMapper.updateById(update) == 0) return;
             mediaService.invalidateUserList(mediaFile.getUserId());
             setState(mediaId, TaskStatus.State.COMPLETED, Duration.ofDays(7));
             taskEventService.publishTranscription(mediaId,
-                    TaskStatus.completed(mediaFile.getTranscriptText()), TaskStage.COMPLETED);
+                    TaskStatus.completed(transcript), TaskStage.COMPLETED);
             log.info("transcription_completed mediaId={}", mediaId);
         } catch (Exception e) {
             setState(mediaId, TaskStatus.State.FAILED, Duration.ofHours(1));
