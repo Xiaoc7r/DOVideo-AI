@@ -84,10 +84,25 @@ public class TranscriptionTaskService {
     }
 
     public TaskStatus status(MediaFile mediaFile) {
-        if (mediaFile.getTranscriptText() != null && !mediaFile.getTranscriptText().isBlank()) {
+        boolean hasTranscript = mediaFile.getTranscriptText() != null && !mediaFile.getTranscriptText().isBlank();
+        String stateValue;
+        try {
+            stateValue = redisTemplate.opsForValue().get(stateKey(mediaFile.getId()));
+            if ((TaskStatus.State.QUEUED.name().equals(stateValue)
+                    || TaskStatus.State.PROCESSING.name().equals(stateValue))
+                    && Boolean.TRUE.equals(redisTemplate.hasKey(activeKey(mediaFile.getId())))) {
+                TaskStatus.State state = TaskStatus.State.valueOf(stateValue);
+                return TaskStatus.of(state, state == TaskStatus.State.QUEUED ? "文字提取任务已排队" : "正在提取文字");
+            }
+        } catch (RuntimeException e) {
+            // Runtime state is advisory when a durable transcript is already available.
+            if (!hasTranscript) throw e;
+            log.warn("transcription_state_read_failed_using_saved_text mediaId={}", mediaFile.getId(), e);
             return TaskStatus.completed(mediaFile.getTranscriptText());
         }
-        String stateValue = redisTemplate.opsForValue().get(stateKey(mediaFile.getId()));
+        if (hasTranscript) {
+            return TaskStatus.completed(mediaFile.getTranscriptText());
+        }
         if (stateValue == null) {
             boolean active = Boolean.TRUE.equals(redisTemplate.hasKey(activeKey(mediaFile.getId())));
             return active
@@ -106,8 +121,7 @@ public class TranscriptionTaskService {
         return switch (state) {
             case COMPLETED -> TaskStatus.completed(mediaFile.getTranscriptText());
             case FAILED -> TaskStatus.of(state, "文字提取失败，请稍后重试");
-            case QUEUED -> TaskStatus.of(state, "文字提取任务已排队");
-            case PROCESSING -> TaskStatus.of(state, "正在提取文字");
+            case QUEUED, PROCESSING -> TaskStatus.of(TaskStatus.State.FAILED, "文字提取任务已中断，请重新提交");
             case NOT_STARTED -> TaskStatus.of(state, "尚未提交文字提取任务");
         };
     }

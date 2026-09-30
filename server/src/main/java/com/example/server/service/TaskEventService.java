@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Supplier;
 
 /** 后端阶段变化发布到这里，SSE 订阅者只关心事件，不反向依赖业务服务。 */
 @Service
@@ -31,7 +32,7 @@ public class TaskEventService implements MessageListener {
     private static final Logger log = LoggerFactory.getLogger(TaskEventService.class);
     private static final long STREAM_TIMEOUT_MS = 30 * 60 * 1000L;
 
-    private final ConcurrentHashMap<String, CopyOnWriteArrayList<SseEmitter>> subscribers =
+    private final ConcurrentHashMap<String, CopyOnWriteArrayList<Subscription>> subscribers =
             new ConcurrentHashMap<>();
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
@@ -55,20 +56,33 @@ public class TaskEventService implements MessageListener {
                                 AnalysisMode mode,
                                 TaskStatus initialStatus,
                                 TaskStage stage) {
+        return subscribe(mediaId, type, goal, mode, () -> TaskEvent.of(initialStatus, stage));
+    }
+
+    /** Register before querying state so completion during the query cannot fall into a gap. */
+    public SseEmitter subscribe(Long mediaId, String type, String goal, AnalysisMode mode,
+                                Supplier<TaskEvent> initialEvent) {
         String key = key(mediaId, type, goal, mode);
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
+        Subscription subscription = new Subscription(emitter);
+        emitter.onCompletion(() -> remove(key, subscription));
+        emitter.onTimeout(() -> remove(key, subscription));
+        emitter.onError(error -> remove(key, subscription));
         // Registration and removal must use the same per-key map operation. Otherwise the last
         // disconnect can remove an empty list between computeIfAbsent and add, orphaning this stream.
         subscribers.compute(key, (ignored, emitters) -> {
-            CopyOnWriteArrayList<SseEmitter> current =
+            CopyOnWriteArrayList<Subscription> current =
                     emitters == null ? new CopyOnWriteArrayList<>() : emitters;
-            current.add(emitter);
+            current.add(subscription);
             return current;
         });
-        emitter.onCompletion(() -> remove(key, emitter));
-        emitter.onTimeout(() -> remove(key, emitter));
-        emitter.onError(error -> remove(key, emitter));
-        send(key, emitter, TaskEvent.of(initialStatus, stage));
+        try {
+            send(key, subscription, initialEvent.get(), true);
+        } catch (RuntimeException error) {
+            remove(key, subscription);
+            emitter.completeWithError(error);
+            throw error;
+        }
         return emitter;
     }
 
@@ -115,30 +129,45 @@ public class TaskEventService implements MessageListener {
     }
 
     private void publishLocal(String key, TaskEvent event) {
-        List<SseEmitter> emitters = subscribers.get(key);
+        List<Subscription> emitters = subscribers.get(key);
         if (emitters == null) return;
-        emitters.forEach(emitter -> send(key, emitter, event));
+        emitters.forEach(subscription -> send(key, subscription, event, false));
     }
 
-    private void send(String key, SseEmitter emitter, TaskEvent event) {
-        try {
-            emitter.send(SseEmitter.event().name("task-status").data(event));
-            if (event.terminal()) {
-                remove(key, emitter);
-                emitter.complete();
+    private void send(String key, Subscription subscription, TaskEvent event, boolean initial) {
+        synchronized (subscription) {
+            if (subscription.closed || (initial && subscription.liveEventDelivered)) return;
+            if (!initial) subscription.liveEventDelivered = true;
+            try {
+                subscription.emitter.send(SseEmitter.event().name("task-status").data(event));
+                if (event.terminal()) {
+                    remove(key, subscription);
+                    subscription.emitter.complete();
+                }
+            } catch (IOException | RuntimeException e) {
+                remove(key, subscription);
+                subscription.emitter.completeWithError(e);
+                log.debug("task_event_stream_closed key={}", key);
             }
-        } catch (IOException | IllegalStateException e) {
-            remove(key, emitter);
-            emitter.completeWithError(e);
-            log.debug("task_event_stream_closed key={}", key);
         }
     }
 
-    private void remove(String key, SseEmitter emitter) {
-        subscribers.computeIfPresent(key, (ignored, emitters) -> {
-            emitters.remove(emitter);
-            return emitters.isEmpty() ? null : emitters;
-        });
+    private void remove(String key, Subscription subscription) {
+        synchronized (subscription) {
+            subscription.closed = true;
+            subscribers.computeIfPresent(key, (ignored, emitters) -> {
+                emitters.remove(subscription);
+                return emitters.isEmpty() ? null : emitters;
+            });
+        }
+    }
+
+    private static final class Subscription {
+        private final SseEmitter emitter;
+        private boolean liveEventDelivered;
+        private boolean closed;
+
+        private Subscription(SseEmitter emitter) { this.emitter = emitter; }
     }
 
     private String key(Long mediaId, String type, String goal, AnalysisMode mode) {

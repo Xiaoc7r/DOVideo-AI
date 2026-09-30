@@ -109,14 +109,15 @@ public class FailedAnalysisTaskService {
         AnalysisMode mode = AnalysisMode.fromNullable(task.getMode());
         String contentHash = AnalysisTaskKeys.normalizeContentHash(task.getMediaId(), task.getContentHash());
         String goalDigest = AnalysisTaskKeys.goalDigest(task.getUserGoal(), mode);
-        String activeKey = AnalysisTaskKeys.active(contentHash, goalDigest);
+        String taskScope = AnalysisTaskKeys.mediaScope(task.getMediaId());
+        String activeKey = AnalysisTaskKeys.active(taskScope, goalDigest);
         Boolean accepted = redisTemplate.opsForValue().setIfAbsent(
                 activeKey, String.valueOf(task.getMediaId()), ACTIVE_TTL);
         if (!Boolean.TRUE.equals(accepted)) throw new IllegalArgumentException("相同任务正在处理中");
 
         boolean dispatched = false;
         try {
-            redisTemplate.delete(AnalysisTaskKeys.attempts(contentHash, goalDigest));
+            redisTemplate.delete(AnalysisTaskKeys.attempts(taskScope, goalDigest));
             rocketMQTemplate.convertAndSend(analysisTopic, new AnalysisTaskMsg(
                     task.getMediaId(), task.getAction(), contentHash, task.getUserGoal(), mode.name()));
             dispatched = true;

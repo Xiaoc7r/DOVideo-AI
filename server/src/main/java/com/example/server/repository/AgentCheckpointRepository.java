@@ -146,7 +146,9 @@ public class AgentCheckpointRepository {
             String payload = checkpointMapper.findPayload(mediaId, checkpointName);
             if (payload == null) return null;
             T value = reader.read(payload);
-            cacheField(redisKey, field, payload, checkpointMapper.findStage(mediaId, checkpointName));
+            // A plan/result row records when that particular value was written, not the
+            // current workflow stage. Rehydrating an older field must not rewind progress.
+            cacheField(redisKey, field, payload, null);
             return value;
         } catch (Exception e) {
             throw new IllegalStateException("读取 Agent Checkpoint 失败: " + checkpointName, e);

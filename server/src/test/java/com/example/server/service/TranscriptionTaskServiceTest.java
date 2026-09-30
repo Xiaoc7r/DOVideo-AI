@@ -15,6 +15,40 @@ import static org.mockito.Mockito.*;
 
 class TranscriptionTaskServiceTest {
     @Test
+    void savedTranscriptRemainsReadableWhenRuntimeStateIsUnavailable() {
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        ValueOperations<String, String> values = mock(ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(values);
+        when(values.get("transcription:state:7")).thenThrow(new IllegalStateException("Redis unavailable"));
+        MediaFile media = new MediaFile(); media.setId(7L); media.setTranscriptText("saved transcript");
+        TranscriptionTaskService service = new TranscriptionTaskService(mock(MediaFileMapper.class),
+                mock(VideoTranscriptionService.class), mock(MediaService.class), redis, mock(TaskEventService.class));
+
+        assertEquals(TaskStatus.completed("saved transcript"), service.status(media));
+        media.setTranscriptText(null);
+        assertThrows(IllegalStateException.class, () -> service.status(media));
+    }
+
+    @Test
+    void activeRetranscriptionTakesPrecedenceOverOldTextAndAnOrphanedStateIsNotForeverBusy() {
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        ValueOperations<String, String> values = mock(ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(values);
+        when(values.get("transcription:state:7")).thenReturn("PROCESSING");
+        when(redis.hasKey("transcription:active:7")).thenReturn(true);
+        MediaFile media = new MediaFile(); media.setId(7L); media.setTranscriptText("previous transcript");
+        TranscriptionTaskService service = new TranscriptionTaskService(mock(MediaFileMapper.class),
+                mock(VideoTranscriptionService.class), mock(MediaService.class), redis, mock(TaskEventService.class));
+        assertEquals(TaskStatus.State.PROCESSING, service.status(media).state());
+        when(values.get("transcription:state:7")).thenReturn("COMPLETED");
+        assertEquals(TaskStatus.State.COMPLETED, service.status(media).state());
+        when(values.get("transcription:state:7")).thenReturn("QUEUED");
+        when(redis.hasKey("transcription:active:7")).thenReturn(false);
+        media.setTranscriptText(null);
+        assertEquals(TaskStatus.State.FAILED, service.status(media).state());
+    }
+
+    @Test
     void transcriptionOnlyWritesTranscriptAndCannotRevertConcurrentAnalysis() {
         MediaFileMapper mapper = mock(MediaFileMapper.class);
         VideoTranscriptionService transcriber = mock(VideoTranscriptionService.class);

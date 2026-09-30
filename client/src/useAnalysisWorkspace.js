@@ -525,13 +525,19 @@ export function useAnalysisWorkspace({
 
   const rerunWithPlan = async () => {
     if (sidebar.value.rerunLoading) return
-    const isCurrent = captureWorkspace()
-    const isCurrentSession = captureAuthSession()
     const tasks = sidebar.value.planDraft.map(task => task.trim()).filter(Boolean)
     if (!tasks.length || tasks.length > 5) {
       showMessage('计划需保留 1 至 5 个有效任务', true)
       return
     }
+    // A revised plan is a new generation even when media, goal and mode are unchanged.
+    workspaceVersion += 1
+    historyRequestVersion += 1
+    metadataRequestVersion += 1
+    const isCurrent = captureWorkspace()
+    const isCurrentSession = captureAuthSession()
+    sidebar.value.followUpLoading = false
+    sidebar.value.feedbackLoading = false
     if (demoMode) {
       sidebar.value.plan = { ...DEMO_PLAN, tasks }
       cancelPlanEdit()
@@ -585,7 +591,7 @@ export function useAnalysisWorkspace({
   const submitFollowUp = async () => {
     const isCurrent = captureWorkspace()
     const question = sidebar.value.followUp.trim()
-    if (!question || sidebar.value.followUpLoading) return
+    if (!question || sidebar.value.followUpLoading || sidebar.value.loading || sidebar.value.rerunLoading) return
     if (demoMode) {
       sidebar.value.content += `\n\n## 追问\n${question}\n\n根据 08:42 的讲解，迭代写法使用显式栈保存待访问节点，时间复杂度仍为 O(n)，额外空间复杂度为 O(h)。`
       sidebar.value.followUp = ''

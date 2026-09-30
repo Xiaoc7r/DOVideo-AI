@@ -118,3 +118,24 @@ test('switching panels while transcription is submitted keeps its background str
   assert.equal(workspace.starts[0][0], 7)
   assert.equal(workspace.starts[0][1], 'text')
 })
+
+test('a late follow-up from the previous plan cannot append to a revision of the same goal', async () => {
+  const answer = deferred()
+  globalThis.fetch = async url => {
+    if (url.startsWith('/analysis/follow-up')) return answer.promise
+    if (url.startsWith('/analysis/analysis-status')) return json({ state: 'COMPLETED', result: 'old report' })
+    return json(null)
+  }
+  const workspace = setup()
+  await workspace.openAgent(item)
+  workspace.sidebar.value.followUp = 'old plan question'
+  const asking = workspace.submitFollowUp()
+  workspace.sidebar.value.planDraft = ['new task']
+  await workspace.rerunWithPlan()
+  answer.resolve(json('late old answer'))
+  await asking
+  assert.equal(workspace.sidebar.value.content, '')
+  assert.equal(workspace.sidebar.value.loading, true)
+  assert.equal(workspace.sidebar.value.followUpLoading, false)
+  assert.equal(workspace.sidebar.value.rerunLoading, false)
+})

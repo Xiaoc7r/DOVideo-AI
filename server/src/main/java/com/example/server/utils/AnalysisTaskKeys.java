@@ -31,7 +31,7 @@ public final class AnalysisTaskKeys {
     }
 
     /**
-     * 模式感知的目标摘要:任务身份 = (内容, 目标, 模式)。
+     * 模式感知的目标摘要:任务身份 = (媒体记录, 目标, 模式),结果复用范围 = (内容, 目标, 模式)。
      *
      * <p>GENERAL 直接委托 {@link #goalDigest(String)},摘要逐字节不变,与引入模式前的既有缓存/键
      * 完全兼容;其余模式把模式名并入摘要,使"同一目标文本、不同模式"落在不同的 checkpoint / 去重 /
@@ -59,6 +59,11 @@ public final class AnalysisTaskKeys {
 
     public static String active(String contentHash, String goalDigest) {
         return "analysis:active:" + contentHash + ":" + goalDigest;
+    }
+
+    /** Submission, retry and revision ownership belongs to a media record, not shared content. */
+    public static String mediaScope(Long mediaId) {
+        return "media-" + mediaId;
     }
 
     public static String lock(String contentHash, String goalDigest) {

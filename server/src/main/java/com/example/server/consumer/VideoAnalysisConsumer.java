@@ -92,12 +92,16 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
         AnalysisMode mode = AnalysisMode.fromNullable(msg.getMode());
         String contentHash = AnalysisTaskKeys.normalizeContentHash(mediaId, msg.getContentHash());
         String goalDigest = AnalysisTaskKeys.goalDigest(msg.getUserGoal(), mode);
-        String lockKey = AnalysisTaskKeys.lock(contentHash, goalDigest);
-        String activeKey = AnalysisTaskKeys.active(contentHash, goalDigest);
+        String taskScope = AnalysisTaskKeys.mediaScope(mediaId);
+        String lockKey = AnalysisTaskKeys.lock(taskScope, goalDigest);
+        String activeKey = AnalysisTaskKeys.active(taskScope, goalDigest);
         String completedKey = AnalysisTaskKeys.completed(contentHash, goalDigest);
-        String attemptsKey = AnalysisTaskKeys.attempts(contentHash, goalDigest);
+        String attemptsKey = AnalysisTaskKeys.attempts(taskScope, goalDigest);
         RLock lock = redissonClient.getLock(lockKey);
+        RLock contentLock = !msg.isRevision() && !taskScope.equals(contentHash)
+                ? redissonClient.getLock(AnalysisTaskKeys.lock(contentHash, goalDigest)) : null;
         boolean acquired = false;
+        boolean contentAcquired = false;
         boolean retrying = false;
         long attempt = 0;
         try {
@@ -105,6 +109,13 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
             if (!acquired) {
                 log.info("video_analysis_skipped mediaId={} acquired={}", mediaId, acquired);
                 return;
+            }
+            if (contentLock != null) {
+                // A distinct media record needs its own result and terminal event. Wait for
+                // the shared result instead of ACKing a task that has never been processed.
+                // No explicit lease: Redisson's watchdog covers the long video operation.
+                contentLock.lockInterruptibly();
+                contentAcquired = true;
             }
             if (!mediaService.exists(mediaId)) {
                 log.info("video_analysis_discarded_deleted_media mediaId={}", mediaId);
@@ -162,6 +173,10 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
                 taskEventService.publishAnalysis(mediaId, msg.getUserGoal(), mode,
                         TaskStatus.completed(completed), TaskStage.COMPLETED);
             }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            retrying = true;
+            throw new IllegalStateException("等待共享分析结果时被中断，交由消息队列重试", e);
         } catch (AgentLoopService.BudgetExceededException e) {
             saveStage(mediaId, msg.getUserGoal(), mode, TaskStage.BUDGET_EXHAUSTED);
             taskEventService.publishAnalysis(mediaId, msg.getUserGoal(), mode,
@@ -219,8 +234,10 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
                     // renewing this lock and prevent later consumers from making progress.
                     log.warn("video_analysis_active_cleanup_failed mediaId={}", mediaId, cleanupError);
                 } finally {
-                    if (lock.isHeldByCurrentThread()) {
-                        lock.unlock();
+                    try {
+                        if (contentAcquired && contentLock.isHeldByCurrentThread()) contentLock.unlock();
+                    } finally {
+                        if (lock.isHeldByCurrentThread()) lock.unlock();
                     }
                 }
             }
@@ -286,12 +303,11 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
         }
         try {
             AnalysisMode mode = AnalysisMode.fromNullable(msg.getMode());
-            String contentHash = AnalysisTaskKeys.normalizeContentHash(
-                    msg.getMediaId(), msg.getContentHash());
+            String taskScope = AnalysisTaskKeys.mediaScope(msg.getMediaId());
             String goalDigest = AnalysisTaskKeys.goalDigest(msg.getUserGoal(), mode);
             redisTemplate.delete(java.util.List.of(
-                    AnalysisTaskKeys.active(contentHash, goalDigest),
-                    AnalysisTaskKeys.attempts(contentHash, goalDigest)));
+                    AnalysisTaskKeys.active(taskScope, goalDigest),
+                    AnalysisTaskKeys.attempts(taskScope, goalDigest)));
             saveStage(msg.getMediaId(), msg.getUserGoal(), mode, TaskStage.DEAD_LETTERED);
             taskEventService.publishAnalysis(msg.getMediaId(), msg.getUserGoal(), mode,
                     TaskStatus.of(TaskStatus.State.FAILED, "任务消息非法，已终止"),

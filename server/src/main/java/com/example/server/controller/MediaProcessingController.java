@@ -2,6 +2,8 @@ package com.example.server.controller;
 
 import com.example.server.common.ErrorCode;
 import com.example.server.common.Result;
+import com.example.server.dto.AnalysisMode;
+import com.example.server.dto.TaskEvent;
 import com.example.server.dto.TaskStatus;
 import com.example.server.dto.TaskStage;
 import com.example.server.entity.MediaFile;
@@ -83,13 +85,14 @@ public class MediaProcessingController {
     public SseEmitter transcriptionEvents(
             @RequestParam Long id,
             @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
-        MediaFile mediaFile = mediaService.requireOwnedMedia(id, userId);
+        mediaService.requireOwnedMedia(id, userId);
         return taskEventService.subscribe(
                 id,
                 TaskEventService.TRANSCRIPTION,
                 "",
-                transcriptionTaskService.status(mediaFile),
-                TaskStage.TRANSCRIPTION);
+                AnalysisMode.GENERAL,
+                () -> TaskEvent.of(transcriptionTaskService.status(mediaService.requireOwnedMedia(id, userId)),
+                        TaskStage.TRANSCRIPTION));
     }
 
     @GetMapping("/download")

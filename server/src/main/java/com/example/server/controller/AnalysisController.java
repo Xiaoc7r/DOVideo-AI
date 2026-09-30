@@ -8,6 +8,7 @@ import com.example.server.dto.AnalysisMode;
 import com.example.server.dto.RouteDecision;
 import com.example.server.dto.RouteRequest;
 import com.example.server.dto.TaskStatus;
+import com.example.server.dto.TaskEvent;
 import com.example.server.dto.VideoEvidenceHit;
 import com.example.server.entity.MediaFile;
 import com.example.server.exception.BusinessException;
@@ -212,8 +213,8 @@ public class AnalysisController {
                 TaskEventService.ANALYSIS,
                 normalizedGoal,
                 analysisMode,
-                statusService.current(id, normalizedGoal, analysisMode),
-                statusService.stage(id, normalizedGoal, analysisMode));
+                () -> TaskEvent.of(statusService.current(id, normalizedGoal, analysisMode),
+                        statusService.stage(id, normalizedGoal, analysisMode)));
     }
 
     @GetMapping("/agent-evaluation")
