@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -104,9 +105,10 @@ public class MediaService {
     }
 
     public List<MediaFile> listByUser(Long userId) {
-        String cacheKey = userListKey(userId);
+        String cacheKey = null;
         try {
-            String cached = redisTemplate.opsForValue().get(cacheKey);
+            cacheKey = currentListCacheKey(userId);
+            String cached = cacheKey == null ? null : redisTemplate.opsForValue().get(cacheKey);
             if (cached != null) {
                 return objectMapper.readValue(cached, new TypeReference<List<MediaFile>>() { });
             }
@@ -120,7 +122,9 @@ public class MediaService {
                         .eq("user_id", userId)
                         .orderByDesc("id"));
         try {
-            redisTemplate.opsForValue().set(
+            // Keep the generation captured before the DB query. A concurrent mutation
+            // moves future readers to a new key even if this old query finishes later.
+            if (cacheKey != null) redisTemplate.opsForValue().set(
                     cacheKey, objectMapper.writeValueAsString(mediaFiles), 30, TimeUnit.MINUTES);
         } catch (Exception e) {
             log.warn("media_list_cache_write_failed userId={}", userId, e);
@@ -190,7 +194,10 @@ public class MediaService {
     public void invalidateUserList(Long userId) {
         if (userId == null) return;
         try {
-            redisTemplate.delete(userListKey(userId));
+            String generationKey = userListKey(userId) + ":generation";
+            String previous = redisTemplate.opsForValue().get(generationKey);
+            redisTemplate.opsForValue().set(generationKey, UUID.randomUUID().toString());
+            if (previous != null) redisTemplate.delete(userListKey(userId) + ":" + previous);
         } catch (RuntimeException e) {
             log.warn("media_list_cache_invalidation_failed userId={}", userId, e);
         }
@@ -244,7 +251,18 @@ public class MediaService {
     }
 
     private String userListKey(Long userId) {
-        return "media:list:v2:user:" + userId;
+        return "media:list:v3:user:" + userId;
+    }
+
+    private String currentListCacheKey(Long userId) {
+        String generationKey = userListKey(userId) + ":generation";
+        String generation = redisTemplate.opsForValue().get(generationKey);
+        if (generation == null) {
+            String fresh = UUID.randomUUID().toString();
+            generation = Boolean.TRUE.equals(redisTemplate.opsForValue().setIfAbsent(generationKey, fresh))
+                    ? fresh : redisTemplate.opsForValue().get(generationKey);
+        }
+        return generation == null ? null : userListKey(userId) + ":" + generation;
     }
 
     private String fileSuffix(String filename) {

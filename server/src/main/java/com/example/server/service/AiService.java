@@ -385,7 +385,9 @@ public class AiService {
 
         VideoContext sourceContext = checkpointService.loadContext(sourceMediaId);
         if (sourceContext == null) return false;
-        checkpointService.saveContext(mediaId, reusableContext(mediaFile.getFilePath(), sourceContext));
+        if (!mediaId.equals(sourceMediaId)) {
+            checkpointService.saveContext(mediaId, reusableContext(mediaFile.getFilePath(), sourceContext));
+        }
         checkpointService.saveResult(mediaId, new AgentState(
                 state.goal(), state.plan(), state.result(), state.critique(), state.round()), mode);
         persistResult(mediaFile, state, null);

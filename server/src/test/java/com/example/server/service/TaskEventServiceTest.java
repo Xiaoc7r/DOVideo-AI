@@ -3,6 +3,7 @@ package com.example.server.service;
 import com.example.server.dto.AnalysisMode;
 import com.example.server.dto.TaskStage;
 import com.example.server.dto.TaskStatus;
+import com.example.server.dto.TaskEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -18,6 +19,17 @@ import static org.mockito.Mockito.mock;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 
 class TaskEventServiceTest {
+    @Test
+    void completionDuringInitialSnapshotIsDeliveredAndCannotBeOverwrittenByStaleSnapshot() throws Exception {
+        TaskEventService events = new TaskEventService(mock(StringRedisTemplate.class), new ObjectMapper());
+        var mvc = MockMvcBuilders.standaloneSetup(new EventController(events)).build();
+        MvcResult result = mvc.perform(get("/racing-events")).andReturn();
+        mvc.perform(asyncDispatch(result));
+        String body = result.getResponse().getContentAsString();
+        assertTrue(body.contains("fresh completion"));
+        assertFalse(body.contains("stale processing"));
+    }
+
     @Test
     void completedSubscriberDoesNotRemoveAReopenedOrDifferentModeStream() throws Exception {
         TaskEventService events = new TaskEventService(mock(StringRedisTemplate.class), new ObjectMapper());
@@ -41,6 +53,13 @@ class TaskEventServiceTest {
     static class EventController {
         private final TaskEventService events;
         EventController(TaskEventService events) { this.events = events; }
+        @GetMapping(value = "/racing-events", produces = "text/event-stream")
+        SseEmitter racingEvents() {
+            return events.subscribe(7L, TaskEventService.ANALYSIS, "goal", AnalysisMode.GENERAL, () -> {
+                events.publishAnalysis(7L, "goal", TaskStatus.completed("fresh completion"), TaskStage.COMPLETED);
+                return TaskEvent.of(TaskStatus.of(TaskStatus.State.PROCESSING, "stale processing"), TaskStage.CONSUMING);
+            });
+        }
         @GetMapping(value = "/events", produces = "text/event-stream")
         SseEmitter events(@RequestParam AnalysisMode mode) {
             return events.subscribe(7L, TaskEventService.ANALYSIS, "goal", mode,

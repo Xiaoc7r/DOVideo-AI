@@ -23,6 +23,12 @@ public class AnalysisStatusService {
     }
 
     public TaskStatus current(Long mediaId, String goal, AnalysisMode mode) {
+        // The last successful result is retained until the worker applies a revision.
+        // It must not terminate the new revision's SSE stream while that revision is queued.
+        if (checkpointService.isRevisionPending(mediaId, goal, mode)
+                && dispatchService.isActive(mediaId, goal, mode)) {
+            return TaskStatus.of(TaskStatus.State.QUEUED, "修订任务已排队，等待按新计划执行");
+        }
         AgentState result = checkpointService.loadResult(mediaId, goal, mode);
         if (result != null && result.result() != null) {
             return TaskStatus.completed(result);

@@ -68,7 +68,7 @@ public class AnalysisDispatchService {
                 : AnalysisTaskMsg.REVISE_ANALYSIS;
         String contentHash = revision == null ? contentHash(mediaId) : "media-" + mediaId;
         String goalDigest = AnalysisTaskKeys.goalDigest(goal, resolvedMode);
-        String activeKey = AnalysisTaskKeys.active(contentHash, goalDigest);
+        String activeKey = AnalysisTaskKeys.active(AnalysisTaskKeys.mediaScope(mediaId), goalDigest);
         Boolean accepted = redisTemplate.opsForValue().setIfAbsent(
                 activeKey, String.valueOf(mediaId), ACTIVE_TTL);
         if (!Boolean.TRUE.equals(accepted)) return SubmissionResult.DUPLICATE;
@@ -108,9 +108,7 @@ public class AnalysisDispatchService {
     public boolean isActive(Long mediaId, String goal, AnalysisMode mode) {
         String goalDigest = AnalysisTaskKeys.goalDigest(goal, mode);
         return Boolean.TRUE.equals(redisTemplate.hasKey(
-                AnalysisTaskKeys.active(contentHash(mediaId), goalDigest)))
-                || Boolean.TRUE.equals(redisTemplate.hasKey(
-                AnalysisTaskKeys.active("media-" + mediaId, goalDigest)));
+                AnalysisTaskKeys.active(AnalysisTaskKeys.mediaScope(mediaId), goalDigest)));
     }
 
     /**

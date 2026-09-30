@@ -191,6 +191,12 @@ public class AgentCheckpointService {
         return beginStagedRevision(mediaId, goal, AnalysisMode.GENERAL);
     }
 
+    public boolean isRevisionPending(Long mediaId, String goal, AnalysisMode mode) {
+        RevisionCheckpoint revision = checkpointRepository.read(mediaId, revisionCheckpoint(goal, mode),
+                revisionKey(mediaId, goal, mode), "revision", RevisionCheckpoint.class);
+        return revision != null && !revision.applied();
+    }
+
     @Transactional
     public boolean beginStagedRevision(Long mediaId, String goal, AnalysisMode mode) {
         String key = revisionKey(mediaId, goal, mode);

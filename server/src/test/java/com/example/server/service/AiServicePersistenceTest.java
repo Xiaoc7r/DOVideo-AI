@@ -20,6 +20,31 @@ import static org.mockito.Mockito.*;
 
 class AiServicePersistenceTest {
     @Test
+    void replayingOwnResultPreservesTheOriginalEvidenceFrameReferences() {
+        MediaFileMapper mapper = mock(MediaFileMapper.class);
+        MediaFile media = new MediaFile(); media.setId(7L); media.setFilePath("source");
+        when(mapper.selectById(7L)).thenReturn(media);
+        AgentCheckpointService checkpoints = mock(AgentCheckpointService.class);
+        VideoContext context = new VideoContext("source", "", List.of(
+                new VideoContext.VideoSegment(0, 1000, "transcript", List.of(), List.of("frames/original.jpg"))));
+        when(checkpoints.loadContext(7L)).thenReturn(context);
+        AiService service = new AiService(mapper, mock(VideoContextService.class),
+                mock(LongVideoContextService.class), mock(AgentLoopService.class), checkpoints, mock(AgentTelemetry.class),
+                mock(MediaService.class), mock(TaskEventService.class), mock(RedissonClient.class),
+                mock(StringRedisTemplate.class), mock(ModeRegistry.class), mock(DeepSeekUtils.class), new ObjectMapper());
+        AgentState result = new AgentState("goal", null,
+                new AnalysisResult("summary", List.of("done"), List.of(), List.of(), List.of()), null, 1);
+
+        assertTrue(service.reuseResult(7L, 7L, result, AnalysisMode.GENERAL));
+        verify(checkpoints, never()).saveContext(anyLong(), any(VideoContext.class));
+        assertFalse(service.reuseResult(7L, 8L, result, AnalysisMode.GENERAL));
+        when(checkpoints.loadContext(8L)).thenReturn(context);
+        assertTrue(service.reuseResult(7L, 8L, result, AnalysisMode.GENERAL));
+        verify(checkpoints).saveContext(eq(7L), argThat(reused ->
+                reused.segments().getFirst().evidenceFrames().equals(List.of("source#timestampMs=0"))));
+    }
+
+    @Test
     void savesSummarySeparatelyAndOnlyFillsMissingTranscript() {
         MediaFileMapper mapper = mock(MediaFileMapper.class);
         AgentCheckpointService checkpoints = mock(AgentCheckpointService.class);
