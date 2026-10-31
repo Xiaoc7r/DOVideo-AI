@@ -12,6 +12,24 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class EvidenceVerificationServiceTest {
 
     private final EvidenceVerificationService service = new EvidenceVerificationService();
+
+    @Test
+    void rejectsUnknownSourcesEvenWhenTheyContainAValidSourceName() {
+        for (String source : List.of("NOT_ASR", "OCR_GUESS", "ASR+WEB", "UNKNOWN_ASR_OCR")) {
+            assertFalse(service.supported(context, new AnalysisResult.Evidence(
+                    125_000, source, "前序遍历", "遍历")), source);
+        }
+    }
+
+    @Test
+    void acceptsOnlyDeclaredSourcesAndHonorsExclusiveSegmentEnd() {
+        for (String source : List.of("ASR", "OCR", "ASR+OCR", "asr")) {
+            assertTrue(service.supported(context, new AnalysisResult.Evidence(
+                    120_000, source, "前序遍历", "遍历")), source);
+            assertFalse(service.supported(context, new AnalysisResult.Evidence(
+                    180_000, source, "前序遍历", "遍历")), source);
+        }
+    }
     private final VideoContext context = new VideoContext(
             "lesson.mp4",
             "总结课程",

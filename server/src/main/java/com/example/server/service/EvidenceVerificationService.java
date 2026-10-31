@@ -17,7 +17,8 @@ public class EvidenceVerificationService {
     public boolean supported(VideoContext context, AnalysisResult.Evidence evidence) {
         if (context == null || evidence == null || evidence.content().isBlank()) return false;
         String source = evidence.source().toUpperCase(Locale.ROOT);
-        if (!source.contains("ASR") && !source.contains("OCR")) return false;
+        // Enforce the model-output contract, not a substring of an invented source.
+        if (!source.equals("ASR") && !source.equals("OCR") && !source.equals("ASR+OCR")) return false;
 
         return context.segments().stream()
                 .filter(segment -> containsTimestamp(segment, evidence.timestampMs()))
@@ -39,10 +40,10 @@ public class EvidenceVerificationService {
     }
 
     private String sourceText(VideoContext.VideoSegment segment, String source) {
-        if (source.contains("ASR") && source.contains("OCR")) {
+        if (source.equals("ASR+OCR")) {
             return segment.transcript() + " " + String.join(" ", segment.ocrTexts());
         }
-        if (source.contains("ASR")) return segment.transcript();
+        if (source.equals("ASR")) return segment.transcript();
         return String.join(" ", segment.ocrTexts());
     }
 
