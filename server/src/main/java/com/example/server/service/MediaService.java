@@ -43,8 +43,11 @@ public class MediaService {
     private final VideoContextService videoContextService;
 
     private static final String MEDIA_MD5_KEY_PREFIX = "media:md5:";
-    private static final Set<String> VIDEO_SUFFIXES = Set.of(
-            ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v");
+    private static final Set<String> MEDIA_SUFFIXES = Set.of(
+            // 视频：走「ASR + 抽帧 OCR」双分支
+            ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v",
+            // 音频：只有语音轨，构建上下文时跳过抽帧与 OCR，仅走 ASR
+            ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus");
 
     public MediaService(MediaFileMapper mediaFileMapper,
                         StringRedisTemplate redisTemplate,
@@ -87,7 +90,7 @@ public class MediaService {
 
     public MediaFile saveUploadedMedia(String filename, String fileUrl, Long userId, String md5) {
         MediaFile mediaFile = new MediaFile();
-        mediaFile.setFilename(normalizeVideoFilename(filename));
+        mediaFile.setFilename(normalizeMediaFilename(filename));
         mediaFile.setFilePath(fileUrl);
         mediaFile.setStatus("COMPLETED");
         mediaFile.setUploadTime(LocalDateTime.now());
@@ -207,18 +210,19 @@ public class MediaService {
         return minioUtils.readableSource(source);
     }
 
-    public String normalizeVideoFilename(String filename) {
+    public String normalizeMediaFilename(String filename) {
         if (filename == null || filename.isBlank()) {
-            throw new IllegalArgumentException("视频文件名不能为空");
+            throw new IllegalArgumentException("文件名不能为空");
         }
         String normalized = filename.replace('\\', '/');
         normalized = normalized.substring(normalized.lastIndexOf('/') + 1).trim();
         if (normalized.isBlank() || normalized.length() > 255) {
-            throw new IllegalArgumentException("视频文件名无效或过长");
+            throw new IllegalArgumentException("文件名无效或过长");
         }
         String suffix = fileSuffix(normalized).toLowerCase(java.util.Locale.ROOT);
-        if (!VIDEO_SUFFIXES.contains(suffix)) {
-            throw new IllegalArgumentException("仅支持 MP4、MOV、MKV、AVI、WEBM 和 M4V 视频");
+        if (!MEDIA_SUFFIXES.contains(suffix)) {
+            throw new IllegalArgumentException(
+                    "仅支持视频（MP4、MOV、MKV、AVI、WEBM、M4V）与音频（MP3、WAV、M4A、AAC、FLAC、OGG、OPUS）");
         }
         return normalized;
     }

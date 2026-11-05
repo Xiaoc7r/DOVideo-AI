@@ -3,7 +3,7 @@ package com.example.server.service;
 import com.example.server.dto.VideoChunk;
 import com.example.server.dto.VideoContext;
 import com.example.server.utils.DeepSeekUtils;
-import com.example.server.utils.EmbeddingUtils;
+import com.example.server.utils.EmbeddingClient;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -18,11 +18,11 @@ public class VideoChunkingService {
     private static final long CHUNK_MS = 5 * 60 * 1000L;
 
     private final DeepSeekUtils deepSeekUtils;
-    private final EmbeddingUtils embeddingUtils;
+    private final EmbeddingClient embeddingUtils;
     private final AgentTelemetry telemetry;
 
     public VideoChunkingService(DeepSeekUtils deepSeekUtils,
-                                EmbeddingUtils embeddingUtils,
+                                EmbeddingClient embeddingUtils,
                                 AgentTelemetry telemetry) {
         this.deepSeekUtils = deepSeekUtils;
         this.embeddingUtils = embeddingUtils;

@@ -11,14 +11,23 @@ import okhttp3.Response;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * 硅基流动（OpenAI 风格）语音转写实现，由 {@code ai.asr.provider=siliconflow} 启用（默认）。
+ *
+ * <p>把音频以 multipart 直接 POST 到 {@code ai.asr.url}，读取响应中的 {@code text} 字段。
+ * 这里保留了项目原有的调用方式，逻辑未改动，只是实现 {@link AsrClient} 接口，
+ * 以便与 {@link BailianAsrUtils} 通过配置切换。
+ */
 @Component
-public class AliyunAsrUtils {
+@ConditionalOnProperty(prefix = "ai.asr", name = "provider", havingValue = "siliconflow", matchIfMissing = true)
+public class AliyunAsrUtils implements AsrClient {
 
     private static final Logger log = LoggerFactory.getLogger(AliyunAsrUtils.class);
     private static final int MAX_ATTEMPTS = 3;
@@ -41,6 +50,7 @@ public class AliyunAsrUtils {
         this.model = model;
     }
 
+    @Override
     public String audioToText(String filePath) {
         File file = new File(filePath);
         // 这里的音频是本流水线上一步用 ffmpeg 切出来的，缺失属于「意外状态」而非「调用方参数错误」，

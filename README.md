@@ -72,6 +72,8 @@
 - **双分支抽取** — FFmpeg 将音频按 60 秒切片，同时通过场景变化检测抽取关键帧，并以 30 秒保底采样避免遗漏静态板书。
 - **并行与容错** — ASR 与 OCR 使用独立有界线程池并行执行；相邻画面通过感知哈希去重，单路失败时仍保留另一条有效信息。
 - **统一结构** — 语音区间、OCR 文本、关键帧与时间戳被合并为统一的 `VideoSegment`，后续检索与校验不再依赖底层模型格式。
+- **纯音频素材** — 上传 MP3、WAV、M4A 等音频时，用 `ffprobe` 探测不到视频流即跳过抽帧与 OCR，只保留语音分支；
+  上下文、Agent 分析、分块检索与追问等后续链路与视频完全共用，不需要单独的处理路径。
 
 ```text
 [02:00 - 03:00]
@@ -186,6 +188,33 @@ cp .env.example .env
 编辑 `.env`，至少替换数据库、Redis、MinIO、Qdrant 的示例密码并设置 `SILICONFLOW_API_KEY`。全新数据库中 `DB_USERNAME` 与 `MYSQL_APP_USER` 应保持一致；`MYSQL_ROOT_PASSWORD` 仅供数据库初始化使用。密钥只保存在本地 `.env`，不要提交到仓库。
 
 默认 LLM 为 `deepseek-ai/DeepSeek-V3.2`。历史示例模型 `deepseek-ai/DeepSeek-R1-Distill-Qwen-32B` 已被硅基流动禁用，会返回 `Model disabled`。`LLM_TIMEOUT_SECONDS` 默认是 `300`，用于避免长视频证据分析在模型响应尚未返回时过早超时；模型或超时配置变更后需要重启后端。
+
+#### ASR 与 Embedding 服务商
+
+LLM 走的是 OpenAI 兼容协议，改 `SILICONFLOW_BASE_URL` 与 `LLM_MODEL` 即可指向任意兼容服务。
+ASR 与 Embedding 的服务商则通过两个变量分别选择，两者可以独立切换：
+
+| 变量 | 可选值 | 默认 | 使用的模型配置 |
+| :--- | :--- | :--- | :--- |
+| `ASR_PROVIDER` | `siliconflow` / `bailian` | `siliconflow` | `ASR_MODEL` 或 `ALIYUN_ASR_MODEL` |
+| `EMBEDDING_PROVIDER` | `siliconflow` / `bailian` | `siliconflow` | `EMBEDDING_MODEL` 或 `ALIYUN_EMBEDDING_MODEL` |
+
+选择 `bailian`（阿里云百炼）时需要额外配置：
+
+```env
+ALIYUN_API_KEY=sk-xxxxxxxx
+ALIYUN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+ALIYUN_ASR_MODEL=qwen3-asr-flash
+ALIYUN_EMBEDDING_MODEL=text-embedding-v4
+```
+
+两种服务商的调用方式不同：硅基流动的 ASR 是 OpenAI 风格的 `/audio/transcriptions` 多段表单直传音频文件；
+百炼没有该接口，音频要转成 base64 data URI 走 `chat/completions` 的 `input_audio` 消息，
+因此单段音频受百炼 10 MB 上限约束（项目本来就按 60 秒切片，正常分片远小于该值）。
+
+切换 Embedding 服务商时注意向量维度：`BAAI/bge-m3` 与 `text-embedding-v4` 默认都是 1024 维，
+但如果换成维度不同的模型，需要先删除 Qdrant 中的 `video_chunks` collection，否则写入会因维度不匹配被拒绝。
+另外，只有超过 5 分钟的视频才会走分块与向量检索，短视频直接使用全量上下文。
 
 ### 2. 启动中间件
 
