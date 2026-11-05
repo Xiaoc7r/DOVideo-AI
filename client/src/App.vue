@@ -44,7 +44,7 @@
               type="file"
               id="file-input"
               @change="handleFileChange"
-              accept=".mp4,.mov,.mkv,.avi,.webm,.m4v"
+              accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus"
               hidden
           />
 
@@ -268,8 +268,17 @@
         </div>
         <div ref="sidebarBody" class="sidebar-body">
           <div v-if="sidebar.type === 'ai'" class="video-evidence">
+            <audio
+                v-if="sidebar.playbackUrl && playbackIsAudio"
+                ref="videoPlayer"
+                :src="sidebar.playbackUrl"
+                controls
+                playsinline
+                preload="metadata"
+                @error="handlePlaybackError"
+            ></audio>
             <video
-                v-if="sidebar.playbackUrl"
+                v-else-if="sidebar.playbackUrl"
                 ref="videoPlayer"
                 :src="sidebar.playbackUrl"
                 controls
@@ -282,7 +291,7 @@
               <span>{{ sidebar.playbackError }}</span>
               <button type="button" @click="retryPlayback">重新加载</button>
             </div>
-            <p v-if="sidebar.playbackUrl">点击分析结果中的时间戳，可跳转到对应画面</p>
+            <p v-if="sidebar.playbackUrl">{{ playbackIsAudio ? '点击分析结果中的时间戳，可跳转到对应语音位置' : '点击分析结果中的时间戳，可跳转到对应画面' }}</p>
           </div>
           <div v-if="sidebar.type === 'ai' && sidebar.mode === 'compose'" class="agent-composer">
             <p class="agent-caption">选择分析模式（决定产物形态）</p>
@@ -508,7 +517,7 @@ import {
   formatDurationText,
   hasUploadProgress,
   uploadVideoInChunks,
-  validateVideoFile
+  validateMediaFile
 } from './chunkUpload'
 import { DEMO_ITEM } from './demoData'
 import { createTaskStreams } from './taskEvents'
@@ -658,7 +667,7 @@ const startUpload = async (selectedFile, extraFileCount = 0) => {
     return
   }
   if (!selectedFile) return
-  const invalid = validateVideoFile(selectedFile)
+  const invalid = validateMediaFile(selectedFile)
   if (invalid) {
     showMsg(`⚠️ ${invalid}`, true)
     return
@@ -970,6 +979,10 @@ const {
   findMediaItem: id => list.value.find(item => item.id === id),
   onAnswerAppended: () => scrollToLatestAnswer()
 })
+
+/** 纯音频素材用 <audio> 播放：<video> 对音频只会渲染一块黑框，观感和操作都更差。 */
+const playbackIsAudio = computed(() =>
+  /\.(mp3|wav|m4a|aac|flac|ogg|opus)(\?|$)/i.test(sidebar.value?.playbackUrl || ''))
 
 /** 追问的答案追加在长文末尾，主动滚过去，否则用户会以为“点了没反应”。 */
 const scrollToLatestAnswer = async () => {

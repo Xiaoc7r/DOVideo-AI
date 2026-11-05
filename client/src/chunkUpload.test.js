@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test, { beforeEach } from 'node:test'
-import { hasUploadProgress, uploadVideoInChunks, validateVideoFile } from './chunkUpload.js'
+import { hasUploadProgress, uploadVideoInChunks, validateMediaFile } from './chunkUpload.js'
 
 const file = new File([new Uint8Array(8)], 'sample.mp4', { lastModified: 7 })
 const json = data => Response.json({ code: 0, message: 'success', data })
@@ -53,9 +53,15 @@ test('a temporary status failure preserves resumable chunks', async () => {
 })
 
 test('server extension limits apply even if a browser reports a video MIME type', () => {
-  assert.match(validateVideoFile(new File(['x'], 'unsupported.wmv', { type: 'video/x-ms-wmv' })), /仅支持/)
-  assert.equal(validateVideoFile(new File(['x'], 'SUPPORTED.MP4')), '')
-  assert.match(validateVideoFile(new File([], 'empty.mp4')), /大小为 0/)
+  assert.match(validateMediaFile(new File(['x'], 'unsupported.wmv', { type: 'video/x-ms-wmv' })), /仅支持/)
+  assert.equal(validateMediaFile(new File(['x'], 'SUPPORTED.MP4')), '')
+  assert.match(validateMediaFile(new File([], 'empty.mp4')), /大小为 0/)
+})
+
+test('audio files are accepted for ASR-only analysis', () => {
+  assert.equal(validateMediaFile(new File(['x'], 'lecture.mp3')), '')
+  assert.equal(validateMediaFile(new File(['x'], 'LECTURE.WAV')), '')
+  assert.equal(validateMediaFile(new File(['x'], 'recording.m4a')), '')
 })
 
 test('legacy progress is migrated only after ownership is verified', async () => {

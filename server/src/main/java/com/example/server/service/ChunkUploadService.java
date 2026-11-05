@@ -55,7 +55,7 @@ public class ChunkUploadService {
     }
 
     public String initialize(String filename, int totalChunks, Long userId) throws IOException {
-        String normalizedFilename = mediaService.normalizeVideoFilename(filename);
+        String normalizedFilename = mediaService.normalizeMediaFilename(filename);
         if (totalChunks <= 0 || totalChunks > MAX_TOTAL_CHUNKS) {
             throw new IllegalArgumentException("totalChunks must be between 1 and " + MAX_TOTAL_CHUNKS);
         }

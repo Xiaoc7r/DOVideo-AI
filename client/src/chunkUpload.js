@@ -43,10 +43,10 @@ export function formatDurationText(seconds) {
 }
 
 /** 选择文件时的前置校验，避免进入上传态之后才失败。 */
-export function validateVideoFile(file) {
-  if (!file) return '请先选择视频文件'
-  if (!/\.(mp4|mov|mkv|avi|webm|m4v)$/i.test(file.name || '')) {
-    return '仅支持 MP4、MOV、MKV、AVI、WEBM 和 M4V 视频'
+export function validateMediaFile(file) {
+  if (!file) return '请先选择视频或音频文件'
+  if (!/\.(mp4|mov|mkv|avi|webm|m4v|mp3|wav|m4a|aac|flac|ogg|opus)$/i.test(file.name || '')) {
+    return '仅支持视频（MP4、MOV、MKV、AVI、WEBM、M4V）与音频（MP3、WAV、M4A、AAC、FLAC、OGG、OPUS）'
   }
   if (!file.size) return '该文件大小为 0，可能已损坏或仍在同步，请重新选择'
   if (file.size > MAX_UPLOAD_BYTES) {
@@ -110,7 +110,7 @@ export function hasUploadProgress(file, userId) {
  * - onProgress 携带字节级进度、实时速度与预计剩余时间。
  */
 export async function uploadVideoInChunks(file, onProgress = () => {}, signal, userId) {
-  const invalid = validateVideoFile(file)
+  const invalid = validateMediaFile(file)
   if (invalid) throw new Error(invalid)
   throwIfAborted(signal)
 

@@ -4,6 +4,9 @@ import com.example.server.dto.VideoContext;
 import com.example.server.dto.TranscriptSegment;
 import com.example.server.utils.MinioUtils;
 import com.example.server.utils.OcrUtils;
+import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONArray;
+import com.alibaba.fastjson2.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -14,6 +17,7 @@ import javax.imageio.ImageIO;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -71,7 +75,10 @@ public class VideoContextService {
         String readableVideoPath = minioUtils.readableSource(videoPath);
         Path workDir = Path.of(System.getProperty("java.io.tmpdir"), "video-context-" + UUID.randomUUID());
         List<String> uploadedEvidenceFrames = new CopyOnWriteArrayList<>();
-        CountDownLatch branchesFinished = new CountDownLatch(2);
+        // 纯音频没有画面流：抽帧既跑不出结果、也没有证据可展示，直接跳过该分支。
+        // 其余链路（ASR、合并、分块检索、AgentLoop）与视频完全一致。
+        boolean hasVideo = hasVideoStream(readableVideoPath, traceId);
+        CountDownLatch branchesFinished = new CountDownLatch(hasVideo ? 2 : 1);
         boolean cleanupWorkDir = true;
         try {
             Files.createDirectories(workDir);
@@ -81,17 +88,20 @@ public class VideoContextService {
                     branchesFinished,
                     () -> transcriptionService.transcribe(
                             readableVideoPath, workDir.resolve("audio"), traceId));
-            Future<BranchResult<FramePart>> frameFuture = submitBranch(
-                    ocrExecutor,
-                    branchesFinished,
-                    () -> extractKeyFrames(
-                            readableVideoPath, workDir.resolve("frames"), traceId, uploadedEvidenceFrames));
+            Future<BranchResult<FramePart>> frameFuture = hasVideo
+                    ? submitBranch(
+                            ocrExecutor,
+                            branchesFinished,
+                            () -> extractKeyFrames(
+                                    readableVideoPath, workDir.resolve("frames"), traceId, uploadedEvidenceFrames))
+                    : CompletableFuture.completedFuture(BranchResult.success(List.of()));
             try {
                 long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(60);
                 BranchResult<TranscriptSegment> transcriptResult = awaitBranch(transcriptFuture, deadline);
                 BranchResult<FramePart> frameResult = awaitBranch(frameFuture, deadline);
                 return finishContext(
-                        videoPath, userGoal, traceId, transcriptResult, frameResult, uploadedEvidenceFrames);
+                        videoPath, userGoal, traceId, transcriptResult, frameResult,
+                        uploadedEvidenceFrames, hasVideo);
             } catch (TimeoutException e) {
                 cleanupWorkDir = cancelBranches(branchesFinished, transcriptFuture, frameFuture);
                 throw new IllegalStateException("VideoContext 分支处理超过总时间预算", e);
@@ -141,10 +151,11 @@ public class VideoContextService {
                                        String traceId,
                                        BranchResult<TranscriptSegment> transcriptResult,
                                        BranchResult<FramePart> frameResult,
-                                       List<String> uploadedEvidenceFrames) {
+                                       List<String> uploadedEvidenceFrames,
+                                       boolean hasVideo) {
         if (transcriptResult.failed() && frameResult.failed()) {
             IllegalStateException failure = new IllegalStateException(
-                    "ASR 和 OCR 分支均失败", transcriptResult.error());
+                    hasVideo ? "ASR 和 OCR 分支均失败" : "音频未解析出有效语音", transcriptResult.error());
             failure.addSuppressed(frameResult.error());
             throw failure;
         }
@@ -159,8 +170,63 @@ public class VideoContextService {
             uploadedEvidenceFrames.clear();
         }
         List<VideoContext.VideoSegment> segments = merge(transcriptResult.items(), frameResult.items());
-        if (segments.isEmpty()) throw new IllegalStateException("视频未解析出有效语音或画面文字");
+        if (segments.isEmpty()) {
+            throw new IllegalStateException(hasVideo ? "视频未解析出有效语音或画面文字" : "音频未解析出有效语音");
+        }
         return new VideoContext(videoPath, userGoal, segments);
+    }
+
+    /**
+     * 判断源文件是否含可抽帧的视频流。
+     *
+     * <p>纯音频（mp3/wav/m4a 等）不该走抽帧与 OCR：ffmpeg 抽帧会直接报错，
+     * 白白占用 OCR 线程池并产生一条无意义的失败分支。这里用 ffprobe 提前判定。
+     *
+     * <p>注意 mp3 的 ID3 封面会以一个 {@code attached_pic=1} 的视频流出现，
+     * 它只是一张静态封面，不能当作视频轨，否则会去对封面做 OCR 并把它当成证据帧。
+     *
+     * <p>探测失败时按「有视频」处理，退回原有完整链路，避免因环境缺少 ffprobe 而漏掉 OCR。
+     */
+    private boolean hasVideoStream(String path, String traceId) {
+        Process process = null;
+        try {
+            process = new ProcessBuilder(
+                    "ffprobe", "-v", "error",
+                    "-select_streams", "v",
+                    "-show_entries", "stream=codec_type:stream_disposition=attached_pic",
+                    "-of", "json", path)
+                    .redirectErrorStream(true)
+                    .start();
+            String output;
+            try (var in = process.getInputStream()) {
+                output = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            }
+            if (!process.waitFor(30, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                return true;
+            }
+            boolean hasVideo = hasPlayableVideoStream(output);
+            telemetry.increment(traceId, hasVideo ? "videoSources" : "audioSources", 1);
+            return hasVideo;
+        } catch (Exception e) {
+            log.warn("media_stream_probe_failed path={}", path, e);
+            return true;
+        } finally {
+            if (process != null && process.isAlive()) process.destroyForcibly();
+        }
+    }
+
+    private boolean hasPlayableVideoStream(String ffprobeJson) {
+        JSONArray streams = JSON.parseObject(ffprobeJson).getJSONArray("streams");
+        if (streams == null || streams.isEmpty()) return false;
+        for (int i = 0; i < streams.size(); i++) {
+            JSONObject stream = streams.getJSONObject(i);
+            if (!"video".equals(stream.getString("codec_type"))) continue;
+            JSONObject disposition = stream.getJSONObject("disposition");
+            boolean attachedPicture = disposition != null && disposition.getIntValue("attached_pic") == 1;
+            if (!attachedPicture) return true;
+        }
+        return false;
     }
 
     private <T> Future<BranchResult<T>> submitBranch(

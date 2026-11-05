@@ -30,7 +30,7 @@ public class MediaIngestService {
     public MediaFile ingestFile(MultipartFile file, Long userId) throws Exception {
         if (file == null || file.isEmpty()) throw new IllegalArgumentException("上传文件不能为空");
 
-        String filename = mediaService.normalizeVideoFilename(file.getOriginalFilename());
+        String filename = mediaService.normalizeMediaFilename(file.getOriginalFilename());
         String md5 = mediaService.calculateMd5(file);
         String fileUrl = minioUtils.uploadFile(file);
         return mediaService.saveUploadedMedia(filename, fileUrl, userId, md5);
