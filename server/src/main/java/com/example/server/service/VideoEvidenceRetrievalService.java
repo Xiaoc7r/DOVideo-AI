@@ -5,7 +5,7 @@ import com.example.server.dto.VideoContext;
 import com.example.server.dto.VideoEvidenceHit;
 import com.example.server.dto.VideoRetrievalIntent;
 import com.example.server.utils.DeepSeekUtils;
-import com.example.server.utils.EmbeddingUtils;
+import com.example.server.utils.EmbeddingClient;
 import org.springframework.stereotype.Service;
 
 import java.util.Comparator;
@@ -22,12 +22,12 @@ public class VideoEvidenceRetrievalService {
     private static final int MAX_SNIPPET_LENGTH = 180;
 
     private final DeepSeekUtils deepSeekUtils;
-    private final EmbeddingUtils embeddingUtils;
+    private final EmbeddingClient embeddingUtils;
     private final QdrantVectorStore vectorStore;
     private final AgentTelemetry telemetry;
 
     public VideoEvidenceRetrievalService(DeepSeekUtils deepSeekUtils,
-                                         EmbeddingUtils embeddingUtils,
+                                         EmbeddingClient embeddingUtils,
                                          QdrantVectorStore vectorStore,
                                          AgentTelemetry telemetry) {
         this.deepSeekUtils = deepSeekUtils;

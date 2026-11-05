@@ -9,14 +9,23 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * 硅基流动文本向量化实现，由 {@code ai.embedding.provider=siliconflow} 启用（默认）。
+ *
+ * <p>复用 {@code ai.deepseek.*} 这一组 OpenAI 兼容的 key/base-url 配置（项目历史命名），
+ * 模型默认 {@code BAAI/bge-m3}。逻辑未改动，只是实现 {@link EmbeddingClient} 接口，
+ * 以便与 {@link BailianEmbeddingUtils} 通过配置切换。
+ */
 @Component
-public class EmbeddingUtils {
+@ConditionalOnProperty(prefix = "ai.embedding", name = "provider", havingValue = "siliconflow", matchIfMissing = true)
+public class EmbeddingUtils implements EmbeddingClient {
 
     private final String apiKey;
     private final String baseUrl;
@@ -35,6 +44,7 @@ public class EmbeddingUtils {
         this.model = model;
     }
 
+    @Override
     public List<Double> embed(String text) {
         if (text == null || text.isBlank()) return List.of();
         try {

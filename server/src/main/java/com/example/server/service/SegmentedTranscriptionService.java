@@ -1,7 +1,7 @@
 package com.example.server.service;
 
 import com.example.server.dto.TranscriptSegment;
-import com.example.server.utils.AliyunAsrUtils;
+import com.example.server.utils.AsrClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -20,11 +20,11 @@ public class SegmentedTranscriptionService {
     private static final Logger log = LoggerFactory.getLogger(SegmentedTranscriptionService.class);
     private static final long SEGMENT_MS = 60_000L;
 
-    private final AliyunAsrUtils aliyunAsrUtils;
+    private final AsrClient asrClient;
     private final AgentTelemetry telemetry;
 
-    public SegmentedTranscriptionService(AliyunAsrUtils aliyunAsrUtils, AgentTelemetry telemetry) {
-        this.aliyunAsrUtils = aliyunAsrUtils;
+    public SegmentedTranscriptionService(AsrClient asrClient, AgentTelemetry telemetry) {
+        this.asrClient = asrClient;
         this.telemetry = telemetry;
     }
 
@@ -45,7 +45,7 @@ public class SegmentedTranscriptionService {
             Path audioFile = audioFiles.get(i);
             try {
                 telemetry.increment(traceId, "asrCalls", 1);
-                String text = aliyunAsrUtils.audioToText(audioFile.toString());
+                String text = asrClient.audioToText(audioFile.toString());
                 if (text != null && !text.isBlank()) {
                     result.add(new TranscriptSegment(i * SEGMENT_MS, (i + 1) * SEGMENT_MS, text));
                 }
@@ -57,7 +57,7 @@ public class SegmentedTranscriptionService {
             }
         }
         if (result.isEmpty() && failedSegments > 0) {
-            // 必须带上 cause：AliyunAsrUtils 已经区分了「429/5xx 可重试」与「4xx 请求本身有问题」，
+            // 必须带上 cause：AsrClient 实现已经区分了「429/5xx 可重试」与「4xx 请求本身有问题」，
             // 这里若丢掉原因，消费者只能看到一个笼统的 IllegalStateException，
             // 于是参数错误也会被当成抖动反复重试整条 ASR+LLM 流水线。
             throw new IllegalStateException("所有 ASR 分片均处理失败", lastSegmentError);

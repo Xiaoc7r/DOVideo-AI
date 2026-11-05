@@ -187,6 +187,33 @@ cp .env.example .env
 
 默认 LLM 为 `deepseek-ai/DeepSeek-V3.2`。历史示例模型 `deepseek-ai/DeepSeek-R1-Distill-Qwen-32B` 已被硅基流动禁用，会返回 `Model disabled`。`LLM_TIMEOUT_SECONDS` 默认是 `300`，用于避免长视频证据分析在模型响应尚未返回时过早超时；模型或超时配置变更后需要重启后端。
 
+#### ASR 与 Embedding 服务商
+
+LLM 走的是 OpenAI 兼容协议，改 `SILICONFLOW_BASE_URL` 与 `LLM_MODEL` 即可指向任意兼容服务。
+ASR 与 Embedding 的服务商则通过两个变量分别选择，两者可以独立切换：
+
+| 变量 | 可选值 | 默认 | 使用的模型配置 |
+| :--- | :--- | :--- | :--- |
+| `ASR_PROVIDER` | `siliconflow` / `bailian` | `siliconflow` | `ASR_MODEL` 或 `ALIYUN_ASR_MODEL` |
+| `EMBEDDING_PROVIDER` | `siliconflow` / `bailian` | `siliconflow` | `EMBEDDING_MODEL` 或 `ALIYUN_EMBEDDING_MODEL` |
+
+选择 `bailian`（阿里云百炼）时需要额外配置：
+
+```env
+ALIYUN_API_KEY=sk-xxxxxxxx
+ALIYUN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+ALIYUN_ASR_MODEL=qwen3-asr-flash
+ALIYUN_EMBEDDING_MODEL=text-embedding-v4
+```
+
+两种服务商的调用方式不同：硅基流动的 ASR 是 OpenAI 风格的 `/audio/transcriptions` 多段表单直传音频文件；
+百炼没有该接口，音频要转成 base64 data URI 走 `chat/completions` 的 `input_audio` 消息，
+因此单段音频受百炼 10 MB 上限约束（项目本来就按 60 秒切片，正常分片远小于该值）。
+
+切换 Embedding 服务商时注意向量维度：`BAAI/bge-m3` 与 `text-embedding-v4` 默认都是 1024 维，
+但如果换成维度不同的模型，需要先删除 Qdrant 中的 `video_chunks` collection，否则写入会因维度不匹配被拒绝。
+另外，只有超过 5 分钟的视频才会走分块与向量检索，短视频直接使用全量上下文。
+
 ### 2. 启动中间件
 
 ```bash
