@@ -10,13 +10,13 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 @Configuration
 public class TaskEventRedisConfig {
 
-    @Bean
-    public RedisMessageListenerContainer taskEventListenerContainer(
-            RedisConnectionFactory connectionFactory,
-            TaskEventService taskEventService) {
-        RedisMessageListenerContainer container = new RedisMessageListenerContainer();
-        container.setConnectionFactory(connectionFactory);
-        container.addMessageListener(taskEventService, new ChannelTopic(TaskEventService.REDIS_CHANNEL));
-        return container;
-    }
+  @Bean
+  public RedisMessageListenerContainer taskEventListenerContainer(
+      RedisConnectionFactory connectionFactory, TaskEventService taskEventService) {
+    RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+    container.setConnectionFactory(connectionFactory);
+    container.addMessageListener(
+        taskEventService, new ChannelTopic(TaskEventService.REDIS_CHANNEL));
+    return container;
+  }
 }

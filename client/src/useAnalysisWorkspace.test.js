@@ -4,19 +4,21 @@ import { useAnalysisWorkspace } from './useAnalysisWorkspace.js'
 import { clearAuthToken, setAuthToken } from './api.js'
 
 const item = { id: 7, filename: 'sample.mp4' }
-const json = data => Response.json({ code: 0, message: 'success', data })
+const json = (data) => Response.json({ code: 0, message: 'success', data })
 const deferred = () => {
   let resolve
-  const promise = new Promise(done => { resolve = done })
+  const promise = new Promise((done) => {
+    resolve = done
+  })
   return { promise, resolve }
 }
 
 beforeEach(() => {
   const storage = new Map()
   globalThis.localStorage = {
-    getItem: key => storage.get(key) ?? null,
+    getItem: (key) => storage.get(key) ?? null,
     setItem: (key, value) => storage.set(key, value),
-    removeItem: key => storage.delete(key)
+    removeItem: (key) => storage.delete(key),
   }
   setAuthToken('token')
 })
@@ -26,14 +28,16 @@ function setup() {
   const workspace = useAnalysisWorkspace({
     demoMode: false,
     taskStreams: { has: () => false, start: (...args) => starts.push(args), stopMedia() {} },
-    showMessage() {}, refreshMediaList: async () => {}, findMediaItem: () => item
+    showMessage() {},
+    refreshMediaList: async () => {},
+    findMediaItem: () => item,
   })
   return { ...workspace, starts }
 }
 
 test('late history cannot replace a new submission and old metadata is cleared', async () => {
   const history = deferred()
-  globalThis.fetch = async url => {
+  globalThis.fetch = async (url) => {
     if (url.startsWith('/analysis/analysis-status')) return history.promise
     if (url.startsWith('/media/playback')) return json('https://example.com/video.mp4')
     return json(null)
@@ -56,8 +60,8 @@ test('late history cannot replace a new submission and old metadata is cleared',
 
 test('logout during submission cannot restart task streams', async () => {
   const submission = deferred()
-  globalThis.fetch = async url => url.startsWith('/analysis/ai?')
-    ? submission.promise : json({ state: 'NOT_STARTED' })
+  globalThis.fetch = async (url) =>
+    url.startsWith('/analysis/ai?') ? submission.promise : json({ state: 'NOT_STARTED' })
   const workspace = setup()
   await workspace.openAgent(item)
   const submitting = workspace.submitAgent()
@@ -83,8 +87,8 @@ test('terminal stream errors return the analysis panel to a visible retry state'
 
 test('closing an evidence search releases its busy state and discards the late result', async () => {
   const evidence = deferred()
-  globalThis.fetch = async url => url.startsWith('/analysis/evidence-search')
-    ? evidence.promise : json({ state: 'NOT_STARTED' })
+  globalThis.fetch = async (url) =>
+    url.startsWith('/analysis/evidence-search') ? evidence.promise : json({ state: 'NOT_STARTED' })
   const workspace = setup()
   await workspace.openAgent(item)
   workspace.sidebar.value.evidenceQuery = 'queue'
@@ -99,8 +103,10 @@ test('closing an evidence search releases its busy state and discards the late r
 test('switching panels while transcription is submitted keeps its background stream', async () => {
   const submission = deferred()
   let submitted
-  const started = new Promise(resolve => { submitted = resolve })
-  globalThis.fetch = async url => {
+  const started = new Promise((resolve) => {
+    submitted = resolve
+  })
+  globalThis.fetch = async (url) => {
     if (url.startsWith('/analysis/transcribe?')) {
       submitted()
       return submission.promise
@@ -121,9 +127,10 @@ test('switching panels while transcription is submitted keeps its background str
 
 test('a late follow-up from the previous plan cannot append to a revision of the same goal', async () => {
   const answer = deferred()
-  globalThis.fetch = async url => {
+  globalThis.fetch = async (url) => {
     if (url.startsWith('/analysis/follow-up')) return answer.promise
-    if (url.startsWith('/analysis/analysis-status')) return json({ state: 'COMPLETED', result: 'old report' })
+    if (url.startsWith('/analysis/analysis-status'))
+      return json({ state: 'COMPLETED', result: 'old report' })
     return json(null)
   }
   const workspace = setup()

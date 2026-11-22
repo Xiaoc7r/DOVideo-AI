@@ -6,7 +6,7 @@ import {
   parseBlocks,
   parseInline,
   stripThink,
-  toSeconds
+  toSeconds,
 } from '../lib/markdown.js'
 
 test('stripThink 剔除成对的推理块', () => {
@@ -41,7 +41,7 @@ test('timestamps do not rewrite code or allow impossible seconds', () => {
   assert.deepEqual(blocks[1].tokens, [
     { type: 'code', value: '[00:30]' },
     { type: 'text', value: ' 与 ' },
-    { type: 'timestamp', seconds: 30, label: '00:30' }
+    { type: 'timestamp', seconds: 30, label: '00:30' },
   ])
   assert.equal(Number.isNaN(toSeconds('02:99')), true)
   assert.equal(linkifyTimestamps('[02:99]'), '[02:99]')
@@ -62,13 +62,13 @@ test('parseInline 混排粗体、行内代码与时间戳', () => {
     { type: 'text', value: ' 与 ' },
     { type: 'code', value: '代码' },
     { type: 'text', value: ' 见 ' },
-    { type: 'timestamp', seconds: 30, label: '00:30' }
+    { type: 'timestamp', seconds: 30, label: '00:30' },
   ])
 })
 
 test('parseInline 识别普通链接', () => {
   assert.deepEqual(parseInline('[官网](https://example.com)'), [
-    { type: 'link', href: 'https://example.com', label: '官网' }
+    { type: 'link', href: 'https://example.com', label: '官网' },
   ])
 })
 
@@ -78,11 +78,14 @@ test('parseInline 无标记时返回单个文本 token', () => {
 
 test('parseBlocks 识别标题层级', () => {
   const blocks = parseBlocks('# 一级\n\n## 二级\n\n### 三级')
-  assert.deepEqual(blocks.map(block => [block.type, block.level]), [
-    ['heading', 1],
-    ['heading', 2],
-    ['heading', 3]
-  ])
+  assert.deepEqual(
+    blocks.map((block) => [block.type, block.level]),
+    [
+      ['heading', 1],
+      ['heading', 2],
+      ['heading', 3],
+    ],
+  )
 })
 
 test('parseBlocks 区分有序与无序列表', () => {
@@ -92,7 +95,7 @@ test('parseBlocks 区分有序与无序列表', () => {
   assert.equal(blocks[1].ordered, true)
   assert.deepEqual(blocks[0].items, [
     [{ type: 'text', value: '甲' }],
-    [{ type: 'text', value: '乙' }]
+    [{ type: 'text', value: '乙' }],
   ])
 })
 
@@ -133,7 +136,10 @@ test('groupSections 把标题前的内容归入 intro', () => {
 
 test('groupSections 按二三级标题切多张卡片', () => {
   const { sections } = groupSections(parseBlocks('## 甲\n- 1\n\n## 乙\n- 2\n\n### 丙\n- 3'))
-  assert.deepEqual(sections.map(section => section.title.tokens[0].value), ['甲', '乙', '丙'])
+  assert.deepEqual(
+    sections.map((section) => section.title.tokens[0].value),
+    ['甲', '乙', '丙'],
+  )
   assert.equal(sections[2].blocks.length, 1)
 })
 

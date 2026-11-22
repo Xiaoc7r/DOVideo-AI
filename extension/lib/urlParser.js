@@ -82,9 +82,10 @@ export function videoKey(rawUrl) {
     return `bilibili:${id}:p${part}`
   }
   if (YOUTUBE_HOST.test(url.hostname)) {
-    const id = url.pathname === '/watch'
-      ? url.searchParams.get('v')
-      : /^\/(?:shorts|live|embed)\/([\w-]+)\/?$/.exec(url.pathname)?.[1]
+    const id =
+      url.pathname === '/watch'
+        ? url.searchParams.get('v')
+        : /^\/(?:shorts|live|embed)\/([\w-]+)\/?$/.exec(url.pathname)?.[1]
     return id ? `youtube:${id}` : null
   }
   if (url.hostname === 'youtu.be') {

@@ -18,33 +18,45 @@ class Element {
         else names.delete(name)
         this.className = [...names].join(' ')
       },
-      add: (...names) => names.forEach(name => this.classList.toggle(name, true)),
-      remove: (...names) => names.forEach(name => this.classList.toggle(name, false))
+      add: (...names) => names.forEach((name) => this.classList.toggle(name, true)),
+      remove: (...names) => names.forEach((name) => this.classList.toggle(name, false)),
     }
   }
-  addEventListener(name, handler) { this.handlers.set(name, handler) }
-  replaceChildren(...children) { this.children = children }
-  append(...children) { this.children.push(...children) }
+  addEventListener(name, handler) {
+    this.handlers.set(name, handler)
+  }
+  replaceChildren(...children) {
+    this.children = children
+  }
+  append(...children) {
+    this.children.push(...children)
+  }
 }
 
-const flush = () => new Promise(resolve => setImmediate(resolve))
+const flush = () => new Promise((resolve) => setImmediate(resolve))
 
 test('401 during import or automatic routing keeps the login view and stops submission', async () => {
   for (const failAt of ['upload', 'route']) {
     const elements = new Map()
-    const element = id => {
+    const element = (id) => {
       if (!elements.has(id)) elements.set(id, new Element())
       return elements.get(id)
     }
     globalThis.document = { getElementById: element, createElement: () => new Element() }
     let token = 'expired-token'
     globalThis.chrome = {
-      storage: { local: {
-        get: async () => ({ authToken: token }),
-        set: async values => { token = values.authToken },
-        remove: async () => { token = null }
-      } },
-      tabs: { query: async () => [] }
+      storage: {
+        local: {
+          get: async () => ({ authToken: token }),
+          set: async (values) => {
+            token = values.authToken
+          },
+          remove: async () => {
+            token = null
+          },
+        },
+      },
+      tabs: { query: async () => [] },
     }
     const requests = []
     globalThis.fetch = async (url, options) => {
@@ -69,6 +81,9 @@ test('401 during import or automatic routing keeps the login view and stops subm
     assert.equal(element('submit-btn').disabled, false)
     assert.equal(element('result').className, 'result')
     assert.equal(token, null)
-    assert.equal(requests.some(url => url.includes('/analysis/ai?')), false)
+    assert.equal(
+      requests.some((url) => url.includes('/analysis/ai?')),
+      false,
+    )
   }
 })

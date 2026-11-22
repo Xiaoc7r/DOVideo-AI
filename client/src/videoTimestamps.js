@@ -9,7 +9,8 @@ export function linkTimestampTokens(tokens) {
       }
       continue
     }
-    if (literalDepth || ['link', 'image', 'code', 'codespan', 'escape'].includes(token.type)) continue
+    if (literalDepth || ['link', 'image', 'code', 'codespan', 'escape'].includes(token.type))
+      continue
     if (token.tokens) linkTimestampTokens(token.tokens)
     else if (token.type === 'text' && !token.escaped) {
       const parts = []
@@ -19,9 +20,16 @@ export function linkTimestampTokens(tokens) {
         if (values.at(-1) >= 60 || (values.length === 3 && values[1] >= 60)) continue
         const seconds = values.reduce((total, value) => total * 60 + value, 0)
         if (!Number.isSafeInteger(seconds)) continue
-        if (match.index > cursor) parts.push({ ...token, text: token.text.slice(cursor, match.index) })
-        parts.push({ type: 'link', raw: match[0], href: `#video-t=${seconds}`, title: null,
-          text: match[1], tokens: [{ type: 'text', raw: match[1], text: match[1] }] })
+        if (match.index > cursor)
+          parts.push({ ...token, text: token.text.slice(cursor, match.index) })
+        parts.push({
+          type: 'link',
+          raw: match[0],
+          href: `#video-t=${seconds}`,
+          title: null,
+          text: match[1],
+          tokens: [{ type: 'text', raw: match[1], text: match[1] }],
+        })
         cursor = match.index + match[0].length
       }
       if (parts.length) {
@@ -30,7 +38,7 @@ export function linkTimestampTokens(tokens) {
         index += parts.length - 1
       }
     }
-    if (token.type === 'list') token.items.forEach(item => linkTimestampTokens(item.tokens))
+    if (token.type === 'list') token.items.forEach((item) => linkTimestampTokens(item.tokens))
     if (token.type === 'table') {
       for (const cell of [...token.header, ...token.rows.flat()]) linkTimestampTokens(cell.tokens)
     }

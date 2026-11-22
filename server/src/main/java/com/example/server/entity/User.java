@@ -11,19 +11,16 @@ import lombok.ToString;
 @TableName("users")
 public class User {
 
-    @TableId(type = IdType.AUTO)
-    private Long id;
+  @TableId(type = IdType.AUTO)
+  private Long id;
 
-    private String username;
+  private String username;
 
-    @JsonIgnore
-    @ToString.Exclude
-    private String password;
+  @JsonIgnore @ToString.Exclude private String password;
 
-    private String nickname;
+  private String nickname;
 
-    private String avatar;
+  private String avatar;
 
-    private String role;
-
+  private String role;
 }

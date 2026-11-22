@@ -64,11 +64,19 @@ function legacyStorageKey(file) {
 }
 
 function readLegacyUploadId(file) {
-  try { return localStorage.getItem(legacyStorageKey(file)) } catch { return null }
+  try {
+    return localStorage.getItem(legacyStorageKey(file))
+  } catch {
+    return null
+  }
 }
 
 function forgetLegacyUpload(file) {
-  try { localStorage.removeItem(legacyStorageKey(file)) } catch { /* Storage is optional. */ }
+  try {
+    localStorage.removeItem(legacyStorageKey(file))
+  } catch {
+    /* Storage is optional. */
+  }
 }
 
 function readStoredUploadId(file, userId) {
@@ -131,7 +139,7 @@ export async function uploadVideoInChunks(file, onProgress = () => {}, signal, u
   const retrying = new Map()
   let completedChunks = resumedChunks
 
-  const emit = phase => {
+  const emit = (phase) => {
     const transferred = uploadedBytes - resumedBytes
     const speed = meter.speed(transferred)
     const remainingBytes = Math.max(0, totalBytes - uploadedBytes)
@@ -144,14 +152,12 @@ export async function uploadVideoInChunks(file, onProgress = () => {}, signal, u
       totalBytes,
       resumedBytes,
       resumedChunks,
-      percent: totalBytes
-        ? Math.min(100, Math.round((uploadedBytes / totalBytes) * 100))
-        : 0,
+      percent: totalBytes ? Math.min(100, Math.round((uploadedBytes / totalBytes) * 100)) : 0,
       bytesPerSecond: speed,
       etaSeconds: speed && remainingBytes ? remainingBytes / speed : null,
       retryingCount: attempts.length,
       retryAttempt: attempts.length ? Math.max(...attempts) : 0,
-      retryMaxAttempts: CHUNK_MAX_ATTEMPTS
+      retryMaxAttempts: CHUNK_MAX_ATTEMPTS,
     })
   }
 
@@ -167,7 +173,7 @@ export async function uploadVideoInChunks(file, onProgress = () => {}, signal, u
       }
       const index = pendingChunks[cursor++]
       try {
-        await uploadChunkWithRetry(file, uploadId, index, totalChunks, signal, attempt => {
+        await uploadChunkWithRetry(file, uploadId, index, totalChunks, signal, (attempt) => {
           retrying.set(index, attempt)
           emit('uploading')
         })
@@ -183,9 +189,7 @@ export async function uploadVideoInChunks(file, onProgress = () => {}, signal, u
     }
   }
 
-  const workerCount = pendingChunks.length
-    ? Math.min(UPLOAD_CONCURRENCY, pendingChunks.length)
-    : 0
+  const workerCount = pendingChunks.length ? Math.min(UPLOAD_CONCURRENCY, pendingChunks.length) : 0
   await Promise.all(Array.from({ length: workerCount }, worker))
   if (fatalError) throw fatalError
   throwIfAborted(signal)
@@ -194,11 +198,11 @@ export async function uploadVideoInChunks(file, onProgress = () => {}, signal, u
   const params = new URLSearchParams({ uploadId })
   const response = await uploadRequest(`/media/complete-upload?${params}`, {
     method: 'POST',
-    signal
+    signal,
   })
   if (!response.ok) {
     throwIfAborted(signal)
-    throw new Error(await readErrorText(response) || '分片合并失败，可重新选择同一文件继续')
+    throw new Error((await readErrorText(response)) || '分片合并失败，可重新选择同一文件继续')
   }
   const media = await response.json()
   forgetUploadProgress(file, userId)
@@ -213,9 +217,11 @@ export async function uploadVideoInChunks(file, onProgress = () => {}, signal, u
 function isDeadUploadSession(status, detail) {
   if (status !== 400) return false
   const text = (detail || '').toLowerCase()
-  return text.includes('does not exist')
-    || text.includes('has expired')
-    || text.includes('invalid uploadid')
+  return (
+    text.includes('does not exist') ||
+    text.includes('has expired') ||
+    text.includes('invalid uploadid')
+  )
 }
 
 async function resolveUploadSession(file, totalChunks, signal, userId) {
@@ -241,9 +247,11 @@ async function resolveUploadSession(file, totalChunks, signal, userId) {
       if (legacyUploadId) {
         if (writeStoredUploadId(file, storedUploadId, userId)) forgetLegacyUpload(file)
       }
-      const uploadedChunks = new Set((Array.isArray(indexes) ? indexes : [])
-        .map(Number)
-        .filter(index => Number.isInteger(index) && index >= 0 && index < totalChunks))
+      const uploadedChunks = new Set(
+        (Array.isArray(indexes) ? indexes : [])
+          .map(Number)
+          .filter((index) => Number.isInteger(index) && index >= 0 && index < totalChunks),
+      )
       return { uploadId: storedUploadId, uploadedChunks }
     }
 
@@ -251,8 +259,9 @@ async function resolveUploadSession(file, totalChunks, signal, userId) {
     const belongsToAnotherUser = Boolean(legacyUploadId) && response.status === 403
     if (!belongsToAnotherUser && !isDeadUploadSession(response.status, detail)) {
       // 401 / 403 / 429 / 5xx：凭据本身可能仍然有效，一律保留，交由用户稍后重试。
-      const error = new Error(detail
-        || `暂时无法确认上传进度（HTTP ${response.status}）。续传进度已保留，请稍后继续上传`)
+      const error = new Error(
+        detail || `暂时无法确认上传进度（HTTP ${response.status}）。续传进度已保留，请稍后继续上传`,
+      )
       error.status = response.status
       throw error
     }
@@ -274,7 +283,7 @@ async function initializeUpload(filename, totalChunks, signal) {
   const params = new URLSearchParams({ filename, totalChunks: String(totalChunks) })
   const response = await uploadRequest(`/media/init-upload?${params}`, {
     method: 'POST',
-    signal
+    signal,
   })
   const body = (await response.text()).trim()
   if (!response.ok) throw new Error(body || '上传初始化失败，请稍后重试')
@@ -297,7 +306,7 @@ async function uploadChunkWithRetry(file, uploadId, chunkIndex, totalChunks, sig
     }
   }
   throw new Error(
-    `分片 ${chunkIndex + 1}/${totalChunks} 上传失败：${lastError?.message || '网络异常'}`
+    `分片 ${chunkIndex + 1}/${totalChunks} 上传失败：${lastError?.message || '网络异常'}`,
   )
 }
 
@@ -312,10 +321,10 @@ async function uploadChunk(file, uploadId, chunkIndex, totalChunks, signal) {
   const response = await uploadRequest('/media/upload-chunk', {
     method: 'POST',
     body: formData,
-    signal
+    signal,
   })
   if (response.ok) return
-  const error = new Error(await readErrorText(response) || '服务端未接收该分片')
+  const error = new Error((await readErrorText(response)) || '服务端未接收该分片')
   error.status = response.status
   throw error
 }
@@ -334,10 +343,7 @@ function retryDelay(attempt) {
 }
 
 function chunkBounds(file, chunkIndex) {
-  return [
-    chunkIndex * CHUNK_SIZE,
-    Math.min(file.size, (chunkIndex + 1) * CHUNK_SIZE)
-  ]
+  return [chunkIndex * CHUNK_SIZE, Math.min(file.size, (chunkIndex + 1) * CHUNK_SIZE)]
 }
 
 function chunkSize(file, chunkIndex) {
@@ -361,7 +367,7 @@ function createSpeedMeter() {
       const bytes = currentBytes - first.bytes
       if (bytes <= 0) return null
       return bytes / (elapsed / 1000)
-    }
+    },
   }
 }
 

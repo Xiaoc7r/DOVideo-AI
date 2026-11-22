@@ -19,7 +19,8 @@ const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/
 const ORDERED_ITEM = /^\s*\d+[.)]\s+/
 const HORIZONTAL_RULE = /^(?:-{3,}|\*{3,}|_{3,})$/
 // 顺序敏感：** 必须排在 * 之前，否则粗体会被当成两个斜体。
-const INLINE = /(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)|(\[([^\]]*)\]\(([^)\s]+)\))|(\[((?:\d{1,2}:)?\d{1,2}:\d{2})\](?!\())/g
+const INLINE =
+  /(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)|(\[([^\]]*)\]\(([^)\s]+)\))|(\[((?:\d{1,2}:)?\d{1,2}:\d{2})\](?!\())/g
 
 /** 剔除模型可能带出的 <think> 推理残留；若整段都是推理，则回退原文避免结果为空。 */
 export function stripThink(markdown) {
@@ -45,9 +46,8 @@ export function toSeconds(label) {
   if (!/^(?:\d+:)?\d+:\d{2}$/.test(value)) return NaN
   const parts = value.split(':').map(Number)
   if (parts.at(-1) >= 60 || (parts.length === 3 && parts[1] >= 60)) return NaN
-  const seconds = parts.length === 3
-    ? parts[0] * 3600 + parts[1] * 60 + parts[2]
-    : parts[0] * 60 + parts[1]
+  const seconds =
+    parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + parts[1]
   return Number.isSafeInteger(seconds) ? seconds : NaN
 }
 
@@ -58,7 +58,8 @@ export function parseInline(text) {
   let cursor = 0
 
   for (const match of source.matchAll(INLINE)) {
-    if (match.index > cursor) tokens.push({ type: 'text', value: source.slice(cursor, match.index) })
+    if (match.index > cursor)
+      tokens.push({ type: 'text', value: source.slice(cursor, match.index) })
     tokens.push(inlineTokenOf(match))
     cursor = match.index + match[0].length
   }
@@ -111,7 +112,10 @@ function readBlock(lines, index) {
 
   const heading = HEADING.exec(line)
   if (heading) {
-    return [{ type: 'heading', level: heading[1].length, tokens: parseInline(heading[2]) }, index + 1]
+    return [
+      { type: 'heading', level: heading[1].length, tokens: parseInline(heading[2]) },
+      index + 1,
+    ]
   }
   if (QUOTE_LINE.test(line)) return readQuote(lines, index)
   if (LIST_ITEM.test(line)) return readList(lines, index)
@@ -127,7 +131,10 @@ function readFence(lines, index) {
     cursor += 1
   }
   // 未闭合的围栏按「读到文末」处理，避免整段内容被吞掉。
-  return [{ type: 'code', language: info || '', text: body.join('\n') }, Math.min(cursor + 1, lines.length)]
+  return [
+    { type: 'code', language: info || '', text: body.join('\n') },
+    Math.min(cursor + 1, lines.length),
+  ]
 }
 
 function readQuote(lines, index) {
@@ -167,11 +174,13 @@ function readParagraph(lines, index) {
 
 function startsNewBlock(line) {
   const trimmed = line.trim()
-  return FENCE.test(trimmed)
-    || HORIZONTAL_RULE.test(trimmed)
-    || HEADING.test(line)
-    || QUOTE_LINE.test(line)
-    || LIST_ITEM.test(line)
+  return (
+    FENCE.test(trimmed) ||
+    HORIZONTAL_RULE.test(trimmed) ||
+    HEADING.test(line) ||
+    QUOTE_LINE.test(line) ||
+    LIST_ITEM.test(line)
+  )
 }
 
 /**
@@ -198,6 +207,6 @@ export function groupSections(blocks) {
   }
   return {
     intro,
-    sections: sections.map(section => ({ ...section, titleOnly: section.blocks.length === 0 }))
+    sections: sections.map((section) => ({ ...section, titleOnly: section.blocks.length === 0 })),
   }
 }

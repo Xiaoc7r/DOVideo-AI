@@ -12,4 +12,4 @@ mysql/logs/
 redis/data/
 qdrant/data/
 minio/data/
- 
+*.log

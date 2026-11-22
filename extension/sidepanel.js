@@ -9,7 +9,7 @@ const DEFAULT_GOAL = '理解视频核心内容，提炼关键结论，并给出�
 const MAX_RECONNECT = 3
 const STAGES = ANALYSIS_STAGES
 
-const $ = id => document.getElementById(id)
+const $ = (id) => document.getElementById(id)
 const els = {
   topStatus: $('top-status'),
   notice: $('notice'),
@@ -28,7 +28,7 @@ const els = {
   stageList: $('stage-list'),
   statusMessage: $('status-message'),
   result: $('result'),
-  backBtn: $('back-btn')
+  backBtn: $('back-btn'),
 }
 
 let onAuthExpired = () => {}
@@ -52,11 +52,13 @@ async function clearToken() {
 }
 
 function isEnvelope(payload) {
-  return payload !== null
-    && typeof payload === 'object'
-    && !Array.isArray(payload)
-    && typeof payload.code === 'number'
-    && 'message' in payload
+  return (
+    payload !== null &&
+    typeof payload === 'object' &&
+    !Array.isArray(payload) &&
+    typeof payload.code === 'number' &&
+    'message' in payload
+  )
 }
 
 function dataAsText(data) {
@@ -71,7 +73,7 @@ function unwrap(response, envelope) {
     status: response.status,
     headers: response.headers,
     json: async () => payload,
-    text: async () => (response.ok ? dataAsText(payload) : (envelope.message || ''))
+    text: async () => (response.ok ? dataAsText(payload) : envelope.message || ''),
   }
 }
 
@@ -87,7 +89,12 @@ async function apiRequest(path, options = {}) {
     if (error?.name === 'AbortError') throw error
     throw new Error(`无法连接后端服务（${API_BASE}），请先启动 server`, { cause: error })
   }
-  if (response.status === 401 && token && token === await getToken() && !path.startsWith('/user/')) {
+  if (
+    response.status === 401 &&
+    token &&
+    token === (await getToken()) &&
+    !path.startsWith('/user/')
+  ) {
     await clearToken()
     onAuthExpired()
   }
@@ -145,12 +152,14 @@ function setBusy(busy) {
 }
 
 function renderStageList() {
-  els.stageList.replaceChildren(...STAGES.map(([key, label]) => {
-    const li = document.createElement('li')
-    li.dataset.stage = key
-    li.textContent = label
-    return li
-  }))
+  els.stageList.replaceChildren(
+    ...STAGES.map(([key, label]) => {
+      const li = document.createElement('li')
+      li.dataset.stage = key
+      li.textContent = label
+      return li
+    }),
+  )
 }
 
 function markStages(currentStage, failed = false) {
@@ -235,15 +244,15 @@ function handleTaskEvent(event) {
     stopStream()
     finishRunning({
       failed: false,
-      text: typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+      text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
     })
   } else if (state === 'FAILED') {
     if (lastProgressStage) markStages(lastProgressStage, true)
     stopStream()
     finishRunning({ failed: true, text: message || '分析失败，请稍后重试' })
   } else {
-    els.statusMessage.textContent = message
-      || (state === 'QUEUED' ? '任务已受理，排队中…' : '分析进行中…')
+    els.statusMessage.textContent =
+      message || (state === 'QUEUED' ? '任务已受理，排队中…' : '分析进行中…')
     const stageLabel = analysisStageLabelOf(stage)
     setTopStatus(stageLabel || '处理中…')
   }
@@ -251,7 +260,7 @@ function handleTaskEvent(event) {
 
 function sleep(delay, signal) {
   if (signal.aborted) return Promise.resolve()
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     const timer = setTimeout(finish, delay)
     signal.addEventListener('abort', finish, { once: true })
 
@@ -276,7 +285,7 @@ function startStream(mediaId, goal, mode) {
       try {
         const response = await apiRequest(`/analysis/analysis-events?${params}`, {
           headers: { Accept: 'text/event-stream' },
-          signal: controller.signal
+          signal: controller.signal,
         })
         if (!isActive()) {
           await response.body?.cancel().catch(() => {})
@@ -284,7 +293,8 @@ function startStream(mediaId, goal, mode) {
         }
         if (!response.ok) {
           const error = new Error(
-            (await response.text()) || `事件流连接失败（HTTP ${response.status}）`)
+            (await response.text()) || `事件流连接失败（HTTP ${response.status}）`,
+          )
           if (!isActive()) return
           if (isTerminalStatus(response.status)) {
             finishRunning({ failed: true, text: error.message })
@@ -293,11 +303,15 @@ function startStream(mediaId, goal, mode) {
           throw error
         }
         if (!response.body) throw new Error('服务端未返回事件流')
-        const terminal = await consumeTaskStream(response.body, event => {
-          if (!isActive()) return
-          attempt = 0
-          handleTaskEvent(event)
-        }, controller.signal)
+        const terminal = await consumeTaskStream(
+          response.body,
+          (event) => {
+            if (!isActive()) return
+            attempt = 0
+            handleTaskEvent(event)
+          },
+          controller.signal,
+        )
         if (terminal) return
       } catch (error) {
         if (!isActive() || error?.name === 'AbortError') return
@@ -311,8 +325,9 @@ function startStream(mediaId, goal, mode) {
     }
   }
 
-  run().catch(error => {
-    if (isActive()) finishRunning({ failed: true, text: error.message || '任务连接异常，请稍后重试' })
+  run().catch((error) => {
+    if (isActive())
+      finishRunning({ failed: true, text: error.message || '任务连接异常，请稍后重试' })
   })
 }
 
@@ -330,7 +345,8 @@ async function enterReadyView({ silentPrefill = false } = {}) {
   if (!els.goal.value) els.goal.value = DEFAULT_GOAL
   try {
     const url = await prefillFromActiveTab()
-    if (version !== operationVersion || els.readyView.hidden || els.videoUrl.value !== previousUrl) return
+    if (version !== operationVersion || els.readyView.hidden || els.videoUrl.value !== previousUrl)
+      return
     if (url) {
       els.videoUrl.value = url
       if (!silentPrefill) showNotice('已抓取当前页视频链接')
@@ -383,7 +399,7 @@ async function submitAnalysis() {
         const decision = await requestJson('/analysis/route', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ goal })
+          body: JSON.stringify({ goal }),
         })
         mode = decision?.mode || 'GENERAL'
       } catch (error) {
@@ -430,7 +446,7 @@ async function handleLogin(event) {
     const data = await requestJson('/user/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ username, password }),
     })
     if (version !== operationVersion) return
     if (!data?.token) throw new Error('登录接口未返回有效令牌')
@@ -471,4 +487,4 @@ async function init() {
   }
 }
 
-init().catch(error => showNotice(error.message || '初始化失败，请重新打开扩展', true))
+init().catch((error) => showNotice(error.message || '初始化失败，请重新打开扩展', true))

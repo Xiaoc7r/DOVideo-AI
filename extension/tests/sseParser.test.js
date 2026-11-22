@@ -7,16 +7,23 @@ test('cancellation discards buffered events and releases the transport', async (
   let cancelled = false
   const body = new ReadableStream({
     start(stream) {
-      stream.enqueue(new TextEncoder().encode(
-        'data: {"state":"PROCESSING"}\n\ndata: {"state":"COMPLETED"}\n\n'))
+      stream.enqueue(
+        new TextEncoder().encode('data: {"state":"PROCESSING"}\n\ndata: {"state":"COMPLETED"}\n\n'),
+      )
     },
-    cancel() { cancelled = true }
+    cancel() {
+      cancelled = true
+    },
   })
   const received = []
-  await consumeTaskStream(body, event => {
-    received.push(event.state)
-    controller.abort()
-  }, controller.signal)
+  await consumeTaskStream(
+    body,
+    (event) => {
+      received.push(event.state)
+      controller.abort()
+    },
+    controller.signal,
+  )
   assert.deepEqual(received, ['PROCESSING'])
   assert.equal(cancelled, true)
   assert.equal(body.locked, false)
@@ -28,7 +35,9 @@ test('terminal completion cancels a stream even when the server leaves it open',
     start(stream) {
       stream.enqueue(new TextEncoder().encode('data: {"state":"COMPLETED"}\n\n'))
     },
-    cancel() { cancelled = true }
+    cancel() {
+      cancelled = true
+    },
   })
   assert.equal(await consumeTaskStream(body, () => {}, new AbortController().signal), true)
   assert.equal(cancelled, true)
@@ -36,20 +45,21 @@ test('terminal completion cancels a stream even when the server leaves it open',
 })
 
 const encoder = new TextEncoder()
-const toStream = text => new ReadableStream({
-  start(controller) {
-    controller.enqueue(encoder.encode(text))
-    controller.close()
-  }
-})
+const toStream = (text) =>
+  new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(text))
+      controller.close()
+    },
+  })
 
 test('跨 chunk 的事件帧能正确拼接解析', () => {
   const parser = createSseFrameParser()
   assert.deepEqual(parser.push('data: {"state":"QUEUED","stage":null}\n\nda'), [
-    { state: 'QUEUED', stage: null }
+    { state: 'QUEUED', stage: null },
   ])
   assert.deepEqual(parser.push('ta: {"state":"PROCESSING","stage":"VIDEO_CONTEXT"}\n\n'), [
-    { state: 'PROCESSING', stage: 'VIDEO_CONTEXT' }
+    { state: 'PROCESSING', stage: 'VIDEO_CONTEXT' },
   ])
 })
 
@@ -60,13 +70,15 @@ test('兼容 CRLF 帧分隔', () => {
 
 test('多行 data 按换行拼接且 event 行被忽略', () => {
   const parser = createSseFrameParser()
-  const events = parser.push([
-    'event: task-status',
-    'data: {"state":"PROCESSING",',
-    'data: "stage":"CRITIC_STARTED"}',
-    '',
-    ''
-  ].join('\n'))
+  const events = parser.push(
+    [
+      'event: task-status',
+      'data: {"state":"PROCESSING",',
+      'data: "stage":"CRITIC_STARTED"}',
+      '',
+      '',
+    ].join('\n'),
+  )
   assert.deepEqual(events, [{ state: 'PROCESSING', stage: 'CRITIC_STARTED' }])
 })
 
@@ -82,10 +94,10 @@ test('非法 JSON 抛出错误，由上层重连逻辑处理', () => {
 
 test('端到端：从 ReadableStream 消费直到终态', async () => {
   const body = toStream(
-    'data: {"state":"QUEUED","stage":null}\n\n'
-    + 'data: {"state":"PROCESSING","stage":"RETRIEVAL"}\n\n'
-    + 'data: {"state":"COMPLETED","result":"# 分析报告"}\n\n'
-    + 'data: {"state":"PROCESSING","stage":"CRITIC_STARTED"}\n\n'
+    'data: {"state":"QUEUED","stage":null}\n\n' +
+      'data: {"state":"PROCESSING","stage":"RETRIEVAL"}\n\n' +
+      'data: {"state":"COMPLETED","result":"# 分析报告"}\n\n' +
+      'data: {"state":"PROCESSING","stage":"CRITIC_STARTED"}\n\n',
   )
   const reader = body.getReader()
   const parser = createSseFrameParser()

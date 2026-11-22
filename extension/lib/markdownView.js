@@ -21,9 +21,9 @@ export function renderResult(markdown, { onSeek, document: doc = document } = {}
 
   for (const block of intro) fragment.append(renderBlock(block, context, { inIntro: true }))
   for (const section of sections) {
-    fragment.append(section.titleOnly
-      ? renderDocumentTitle(section, context)
-      : renderCard(section, context))
+    fragment.append(
+      section.titleOnly ? renderDocumentTitle(section, context) : renderCard(section, context),
+    )
   }
   return fragment
 }
@@ -98,7 +98,7 @@ function renderBlock(block, context, { inIntro }) {
 }
 
 function renderInline(tokens, context) {
-  return tokens.map(token => renderToken(token, context))
+  return tokens.map((token) => renderToken(token, context))
 }
 
 function renderToken(token, context) {

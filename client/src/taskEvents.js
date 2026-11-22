@@ -9,8 +9,8 @@ import { isTerminalStatus } from './taskEventsPolicy.js'
 export function createTaskStreams({ onActiveChange = () => {} } = {}) {
   const streams = new Map()
   const keyOf = (id, type, scope = '') => `${type}:${id}:${scope}`
-  const publish = () => onActiveChange([...streams.values()]
-    .map(({ id, type, scope }) => ({ id, type, scope })))
+  const publish = () =>
+    onActiveChange([...streams.values()].map(({ id, type, scope }) => ({ id, type, scope })))
 
   const stop = (id, type, scope = '') => {
     const key = keyOf(id, type, scope)
@@ -28,7 +28,7 @@ export function createTaskStreams({ onActiveChange = () => {} } = {}) {
     publish()
   }
 
-  const stopMedia = id => {
+  const stopMedia = (id) => {
     let changed = false
     for (const [key, entry] of streams.entries()) {
       if (String(entry.id) !== String(id)) continue
@@ -47,8 +47,10 @@ export function createTaskStreams({ onActiveChange = () => {} } = {}) {
     streams.set(key, { controller, id, type, scope })
     publish()
     let reconnectAttempt = 0
-    const isActive = () => !controller.signal.aborted
-      && streams.get(key)?.controller === controller && isCurrentSession()
+    const isActive = () =>
+      !controller.signal.aborted &&
+      streams.get(key)?.controller === controller &&
+      isCurrentSession()
 
     const release = () => {
       if (streams.get(key)?.controller !== controller) return
@@ -61,7 +63,7 @@ export function createTaskStreams({ onActiveChange = () => {} } = {}) {
         try {
           const response = await apiRequest(path, {
             headers: { Accept: 'text/event-stream' },
-            signal: controller.signal
+            signal: controller.signal,
           })
           if (!isActive()) {
             await response.body?.cancel().catch(() => {})
@@ -70,7 +72,8 @@ export function createTaskStreams({ onActiveChange = () => {} } = {}) {
           }
           if (!response.ok) {
             const error = new Error(
-              (await response.text()) || `事件流连接失败（HTTP ${response.status}）`)
+              (await response.text()) || `事件流连接失败（HTTP ${response.status}）`,
+            )
             error.status = response.status
             if (!isActive()) return
             // 目标不存在、无权访问、参数非法这类错误不会自愈，继续重连只是空转，
@@ -83,17 +86,24 @@ export function createTaskStreams({ onActiveChange = () => {} } = {}) {
             throw error
           }
           if (!response.body) throw new Error('服务端未返回事件流')
-          const terminal = await consumeStream(response.body, async event => {
-            if (!isActive()) return
-            reconnectAttempt = 0
-            await onEvent(event, controller.signal)
-          }, controller.signal)
+          const terminal = await consumeStream(
+            response.body,
+            async (event) => {
+              if (!isActive()) return
+              reconnectAttempt = 0
+              await onEvent(event, controller.signal)
+            },
+            controller.signal,
+          )
           if (terminal) {
             release()
             return
           }
         } catch (error) {
-          if (!isActive()) { release(); return }
+          if (!isActive()) {
+            release()
+            return
+          }
           onError?.(error, reconnectAttempt + 1)
         }
         const delay = Math.min(15_000, 1_000 * 2 ** reconnectAttempt++)
@@ -102,8 +112,11 @@ export function createTaskStreams({ onActiveChange = () => {} } = {}) {
       release()
     }
 
-    run().catch(error => {
-      if (!isActive()) { release(); return }
+    run().catch((error) => {
+      if (!isActive()) {
+        release()
+        return
+      }
       // 走到这里说明重连循环本身异常退出，连接不会再恢复，同样按终态通知。
       release()
       onError?.(error, reconnectAttempt + 1, true)
@@ -112,17 +125,17 @@ export function createTaskStreams({ onActiveChange = () => {} } = {}) {
 
   return {
     has: (id, type, scope = '') => streams.has(keyOf(id, type, scope)),
-    hasMedia: id => [...streams.values()].some(entry => String(entry.id) === String(id)),
+    hasMedia: (id) => [...streams.values()].some((entry) => String(entry.id) === String(id)),
     start,
     stop,
     stopMedia,
-    stopAll
+    stopAll,
   }
 }
 
 function waitForRetry(delay, signal) {
   if (signal.aborted) return Promise.resolve()
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     const timer = setTimeout(finish, delay)
     signal.addEventListener('abort', finish, { once: true })
 
@@ -138,7 +151,9 @@ async function consumeStream(body, onEvent, signal) {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  const cancel = () => { reader.cancel().catch(() => {}) }
+  const cancel = () => {
+    reader.cancel().catch(() => {})
+  }
   signal.addEventListener('abort', cancel, { once: true })
   try {
     while (!signal.aborted) {
@@ -149,9 +164,10 @@ async function consumeStream(body, onEvent, signal) {
       buffer = frames.pop() || ''
       for (const frame of frames) {
         if (signal.aborted) return false
-        const data = frame.split(/\r?\n/)
-          .filter(line => line.startsWith('data:'))
-          .map(line => line.slice(5).trimStart())
+        const data = frame
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
           .join('\n')
         if (!data) continue
         const event = JSON.parse(data)

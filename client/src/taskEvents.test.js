@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { isTerminalStatus } from './taskEventsPolicy.js'
 import { createTaskStreams } from './taskEvents.js'
 
-const flush = () => new Promise(resolve => setImmediate(resolve))
+const flush = () => new Promise((resolve) => setImmediate(resolve))
 
 async function until(predicate) {
   for (let i = 0; i < 30 && !predicate(); i += 1) await flush()
@@ -23,15 +23,19 @@ test('stopping during an event drops remaining buffered events and cancels the r
   let cancelled = false
   const body = new ReadableStream({
     start(controller) {
-      controller.enqueue(new TextEncoder().encode(
-        'data: {"state":"PROCESSING"}\n\ndata: {"state":"COMPLETED"}\n\n'))
+      controller.enqueue(
+        new TextEncoder().encode('data: {"state":"PROCESSING"}\n\ndata: {"state":"COMPLETED"}\n\n'),
+      )
     },
-    cancel() { cancelled = true }
+    cancel() {
+      cancelled = true
+    },
   })
-  globalThis.fetch = async () => new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
+  globalThis.fetch = async () =>
+    new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
   const streams = createTaskStreams()
   const events = []
-  streams.start(1, 'ai', 'goal', '/events', event => {
+  streams.start(1, 'ai', 'goal', '/events', (event) => {
     events.push(event.state)
     streams.stopAll()
   })
@@ -45,14 +49,19 @@ test('a terminal event releases an open transport without waiting for server EOF
   let cancelled = false
   const body = new ReadableStream({
     start(controller) {
-      controller.enqueue(new TextEncoder().encode('data: {"state":"COMPLETED","result":"done"}\n\n'))
+      controller.enqueue(
+        new TextEncoder().encode('data: {"state":"COMPLETED","result":"done"}\n\n'),
+      )
     },
-    cancel() { cancelled = true }
+    cancel() {
+      cancelled = true
+    },
   })
-  globalThis.fetch = async () => new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
+  globalThis.fetch = async () =>
+    new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
   const streams = createTaskStreams()
   const events = []
-  streams.start(1, 'ai', 'goal', '/events', event => events.push(event.result))
+  streams.start(1, 'ai', 'goal', '/events', (event) => events.push(event.result))
   await until(() => cancelled && !streams.hasMedia(1))
   assert.deepEqual(events, ['done'])
 })
@@ -60,10 +69,20 @@ test('a terminal event releases an open transport without waiting for server EOF
 test('a stopped pending request cannot report a late terminal HTTP error', async () => {
   globalThis.localStorage = { getItem: () => 'token' }
   let respond
-  globalThis.fetch = () => new Promise(resolve => { respond = resolve })
+  globalThis.fetch = () =>
+    new Promise((resolve) => {
+      respond = resolve
+    })
   const streams = createTaskStreams()
   const errors = []
-  streams.start(1, 'ai', 'goal', '/events', () => {}, error => errors.push(error))
+  streams.start(
+    1,
+    'ai',
+    'goal',
+    '/events',
+    () => {},
+    (error) => errors.push(error),
+  )
   streams.stopAll()
   respond(new Response('missing', { status: 404 }))
   await flush()

@@ -25,7 +25,12 @@ body {
   margin: 0;
   background: var(--bg-deep);
   color: var(--text-main);
-  font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    'PingFang SC',
+    'Microsoft YaHei',
+    sans-serif;
   font-size: 13px;
   line-height: 1.6;
 }
@@ -52,7 +57,7 @@ body {
 }
 
 .brand::before {
-  content: "";
+  content: '';
   display: inline-block;
   width: 6px;
   height: 6px;
@@ -144,7 +149,9 @@ button {
   font: inherit;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity 0.15s ease, transform 0.1s ease;
+  transition:
+    opacity 0.15s ease,
+    transform 0.1s ease;
 }
 
 button:active:not(:disabled) {
@@ -203,7 +210,7 @@ button:disabled {
 
 /* 竖线连成时间线；最后一项不再往下画。 */
 .stages li::before {
-  content: "";
+  content: '';
   position: absolute;
   left: 5px;
   top: 16px;
@@ -217,7 +224,7 @@ button:disabled {
 }
 
 .stages li::after {
-  content: "";
+  content: '';
   position: absolute;
   left: 0;
   top: 10px;
@@ -259,8 +266,13 @@ button:disabled {
 }
 
 @keyframes pulse {
-  0%, 100% { box-shadow: 0 0 0 3px rgba(197, 249, 70, 0.15); }
-  50% { box-shadow: 0 0 0 6px rgba(197, 249, 70, 0.05); }
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgba(197, 249, 70, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(197, 249, 70, 0.05);
+  }
 }
 
 .status {
