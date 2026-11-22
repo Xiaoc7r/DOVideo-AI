@@ -104,14 +104,10 @@ public class AiService {
     String traceId = telemetry.start(mediaId, userGoal, resolvedMode);
     telemetry.bind(traceId);
     TaskStage currentStage = TaskStage.VIDEO_CONTEXT;
-    MediaFile mediaFile = mediaFileMapper.selectById(mediaId);
-    if (mediaFile == null) {
-      telemetry.flush(traceId);
-      telemetry.clear();
-      throw new IllegalArgumentException("media does not exist: " + mediaId);
-    }
-
+    MediaFile mediaFile = null;
     try {
+      mediaFile = mediaFileMapper.selectById(mediaId);
+      if (mediaFile == null) throw new IllegalArgumentException("media does not exist: " + mediaId);
       // Checkpoint 键 = (mediaId, goalDigest(goal, mode)):不同模式的同一目标互不串键,
       // 因此这里带 mode 读取,不会误取别的模式已完成的结果。
       AgentState agentState = checkpointService.loadResult(mediaId, userGoal, resolvedMode);
@@ -145,7 +141,8 @@ public class AiService {
           agentState.round());
     } catch (Exception e) {
       try {
-        checkpointService.saveFailure(mediaId, userGoal, resolvedMode, currentStage, e);
+        if (mediaFile != null)
+          checkpointService.saveFailure(mediaId, userGoal, resolvedMode, currentStage, e);
       } catch (RuntimeException checkpointError) {
         e.addSuppressed(checkpointError);
         log.error(

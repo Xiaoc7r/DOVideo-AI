@@ -486,6 +486,10 @@ export function useAnalysisWorkspace({
     metadataRequestVersion += 1
     const isCurrent = captureWorkspace()
     const mediaId = sidebar.value.mediaId
+    evidenceRequestVersion += 1
+    sidebar.value.evidenceLoading = false
+    sidebar.value.evidenceResults = []
+    sidebar.value.evidenceError = ''
     // 后端、SSE scope 与异步回调必须使用同一份归一化目标，否则前后空格会让当前任务判定失配。
     sidebar.value.goal = goal
     sidebar.value.error = ''
@@ -584,6 +588,10 @@ export function useAnalysisWorkspace({
     const isCurrentSession = captureAuthSession()
     sidebar.value.followUpLoading = false
     sidebar.value.feedbackLoading = false
+    evidenceRequestVersion += 1
+    sidebar.value.evidenceLoading = false
+    sidebar.value.evidenceResults = []
+    sidebar.value.evidenceError = ''
     if (demoMode) {
       sidebar.value.plan = { ...DEMO_PLAN, tasks }
       cancelPlanEdit()
@@ -689,6 +697,9 @@ export function useAnalysisWorkspace({
     if (!query || sidebar.value.evidenceLoading) return
     const requestVersion = ++evidenceRequestVersion
     const mediaId = sidebar.value.mediaId
+    const isCurrent = captureWorkspace()
+    const canApply = () =>
+      isCurrent() && requestVersion === evidenceRequestVersion && sidebar.value.mediaId === mediaId
     sidebar.value.evidenceLoading = true
     sidebar.value.evidenceError = ''
     sidebar.value.evidenceResults = []
@@ -704,7 +715,7 @@ export function useAnalysisWorkspace({
             ocrTexts: ['前序遍历：根节点、左子树、右子树'],
           },
         ]
-        if (requestVersion === evidenceRequestVersion) {
+        if (canApply()) {
           sidebar.value.evidenceResults = demoResults
         }
         return
@@ -719,17 +730,17 @@ export function useAnalysisWorkspace({
         throw new Error(detail || '视频证据检索失败')
       }
       const results = await response.json()
-      if (requestVersion !== evidenceRequestVersion || sidebar.value.mediaId !== mediaId) return
+      if (!canApply()) return
       sidebar.value.evidenceResults = Array.isArray(results) ? results : []
       if (!sidebar.value.evidenceResults.length) {
         sidebar.value.evidenceError = '没有找到匹配的视频证据'
       }
     } catch (error) {
-      if (requestVersion !== evidenceRequestVersion || sidebar.value.mediaId !== mediaId) return
+      if (!canApply()) return
       sidebar.value.evidenceResults = []
       sidebar.value.evidenceError = error.message || '视频证据检索失败'
     } finally {
-      if (requestVersion === evidenceRequestVersion && sidebar.value.mediaId === mediaId) {
+      if (canApply()) {
         sidebar.value.evidenceLoading = false
       }
     }

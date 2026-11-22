@@ -17,13 +17,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -183,20 +186,50 @@ public class VideoContextService {
       ThreadPoolTaskExecutor executor,
       CountDownLatch branchesFinished,
       ThrowingSupplier<List<T>> work) {
+    BranchTask<BranchResult<T>> task =
+        new BranchTask<>(
+            () -> {
+              try {
+                return BranchResult.success(work.get());
+              } catch (Exception e) {
+                return BranchResult.failure(e);
+              }
+            },
+            branchesFinished);
     try {
-      return executor.submit(
-          () -> {
-            try {
-              return BranchResult.success(work.get());
-            } catch (Exception e) {
-              return BranchResult.failure(e);
-            } finally {
-              branchesFinished.countDown();
-            }
-          });
+      executor.execute(task);
+      return task;
     } catch (RuntimeException e) {
-      branchesFinished.countDown();
+      task.cancel(false);
       return CompletableFuture.completedFuture(BranchResult.failure(e));
+    }
+  }
+
+  // A cancelled queued Future never runs its callable's finally block.
+  static final class BranchTask<T> extends FutureTask<T> {
+    private final AtomicBoolean claimed = new AtomicBoolean();
+    private final CountDownLatch finished;
+
+    BranchTask(Callable<T> work, CountDownLatch finished) {
+      super(work);
+      this.finished = finished;
+    }
+
+    @Override
+    public void run() {
+      if (!claimed.compareAndSet(false, true)) return;
+      try {
+        super.run();
+      } finally {
+        finished.countDown();
+      }
+    }
+
+    @Override
+    public boolean cancel(boolean mayInterruptIfRunning) {
+      boolean cancelled = super.cancel(mayInterruptIfRunning);
+      if (cancelled && claimed.compareAndSet(false, true)) finished.countDown();
+      return cancelled;
     }
   }
 

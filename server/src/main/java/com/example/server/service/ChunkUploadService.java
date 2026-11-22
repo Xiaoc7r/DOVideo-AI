@@ -98,21 +98,34 @@ public class ChunkUploadService {
     // temporary objects for an upload that already has its final media record.
     if (completedUpload(uploadId, userId) != null) return;
 
-    try (InputStream inputStream = chunk.getInputStream()) {
-      minioUtils.uploadObject(
-          chunkObjectName(uploadId, chunkIndex),
-          inputStream,
-          chunk.getSize(),
-          "application/octet-stream");
+    RLock uploadLock = redissonClient.getReadWriteLock("lock:upload:state:" + uploadId).readLock();
+    boolean acquired = false;
+    try {
+      acquired = uploadLock.tryLock(30, TimeUnit.SECONDS);
+      if (!acquired) throw new BusinessException(ErrorCode.CONFLICT, "该上传任务正在合并中，请稍后重试");
+      // Completion may have won while this request waited for the shared state lock.
+      if (completedUpload(uploadId, userId) != null) return;
+      try (InputStream inputStream = chunk.getInputStream()) {
+        minioUtils.uploadObject(
+            chunkObjectName(uploadId, chunkIndex),
+            inputStream,
+            chunk.getSize(),
+            "application/octet-stream");
+      }
+      redisTemplate.opsForSet().add(partsKey(uploadId), String.valueOf(chunkIndex));
+      redisTemplate.expire(uploadKey(uploadId), 1, TimeUnit.DAYS);
+      redisTemplate.expire(partsKey(uploadId), 1, TimeUnit.DAYS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw e;
+    } finally {
+      if (acquired && uploadLock.isHeldByCurrentThread()) uploadLock.unlock();
     }
-    redisTemplate.opsForSet().add(partsKey(uploadId), String.valueOf(chunkIndex));
-    redisTemplate.expire(uploadKey(uploadId), 1, TimeUnit.DAYS);
-    redisTemplate.expire(partsKey(uploadId), 1, TimeUnit.DAYS);
   }
 
   public MediaFile complete(String uploadId, Long userId) throws Exception {
     validateUploadId(uploadId);
-    RLock mergeLock = redissonClient.getLock("lock:upload:merge:" + uploadId);
+    RLock mergeLock = redissonClient.getReadWriteLock("lock:upload:state:" + uploadId).writeLock();
     // 这两种情况是客户端可重试的“状态冲突”，不是服务端故障：用 BusinessException 标成 409，
     // 避免和本类中真正的内部错误（如 md5Digest 的 IllegalStateException）混在一起被兜底成 500。
     if (!mergeLock.tryLock()) {

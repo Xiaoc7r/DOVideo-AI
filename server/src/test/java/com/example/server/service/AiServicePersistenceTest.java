@@ -19,6 +19,58 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 
 class AiServicePersistenceTest {
   @Test
+  void deletedMediaCannotCreateFailureCheckpointsButStillReleasesItsTrace() {
+    AgentCheckpointService checkpoints = mock(AgentCheckpointService.class);
+    AgentTelemetry telemetry = mock(AgentTelemetry.class);
+    when(telemetry.start(7L, "goal", AnalysisMode.GENERAL)).thenReturn("trace");
+    AiService service =
+        new AiService(
+            mock(MediaFileMapper.class),
+            mock(VideoContextService.class),
+            mock(LongVideoContextService.class),
+            mock(AgentLoopService.class),
+            checkpoints,
+            telemetry,
+            mock(MediaService.class),
+            mock(TaskEventService.class),
+            mock(RedissonClient.class),
+            mock(StringRedisTemplate.class),
+            mock(ModeRegistry.class),
+            mock(DeepSeekUtils.class),
+            new ObjectMapper());
+    assertThrows(IllegalStateException.class, () -> service.asyncAnalyze(7L, "goal"));
+    verifyNoInteractions(checkpoints);
+    verify(telemetry).flush("trace");
+    verify(telemetry).clear();
+  }
+
+  @Test
+  void failedInitialDatabaseReadStillFlushesAndClearsTheBoundTrace() {
+    MediaFileMapper mapper = mock(MediaFileMapper.class);
+    when(mapper.selectById(7L)).thenThrow(new IllegalStateException("DB unavailable"));
+    AgentTelemetry telemetry = mock(AgentTelemetry.class);
+    when(telemetry.start(7L, "goal", AnalysisMode.GENERAL)).thenReturn("trace");
+    AiService service =
+        new AiService(
+            mapper,
+            mock(VideoContextService.class),
+            mock(LongVideoContextService.class),
+            mock(AgentLoopService.class),
+            mock(AgentCheckpointService.class),
+            telemetry,
+            mock(MediaService.class),
+            mock(TaskEventService.class),
+            mock(RedissonClient.class),
+            mock(StringRedisTemplate.class),
+            mock(ModeRegistry.class),
+            mock(DeepSeekUtils.class),
+            new ObjectMapper());
+    assertThrows(IllegalStateException.class, () -> service.asyncAnalyze(7L, "goal"));
+    verify(telemetry).flush("trace");
+    verify(telemetry).clear();
+  }
+
+  @Test
   void replayingOwnResultPreservesTheOriginalEvidenceFrameReferences() {
     MediaFileMapper mapper = mock(MediaFileMapper.class);
     MediaFile media = new MediaFile();
