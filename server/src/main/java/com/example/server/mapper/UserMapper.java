@@ -6,5 +6,5 @@ import org.apache.ibatis.annotations.Mapper;
 
 @Mapper
 public interface UserMapper extends BaseMapper<User> {
-    //MyBatis-Plus自动搞定增删改查
+  // MyBatis-Plus自动搞定增删改查
 }

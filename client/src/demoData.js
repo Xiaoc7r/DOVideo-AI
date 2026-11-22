@@ -3,12 +3,12 @@ export const DEMO_ITEM = {
   filename: '数据结构课程 · 二叉树遍历.mp4',
   status: 'COMPLETED',
   uploadTime: '2026-07-10T14:30:00',
-  transcriptText: '本节课介绍二叉树前序、中序和后序遍历，并对比递归与迭代实现。'
+  transcriptText: '本节课介绍二叉树前序、中序和后序遍历，并对比递归与迭代实现。',
 }
 
 export const DEMO_PLAN = {
   understoodGoal: '理解视频核心内容，提炼关键结论，并给出带时间戳的证据和可执行建议',
-  tasks: ['定位视频章节与核心主题', '融合 ASR 与关键帧 OCR 证据', '提炼结论并进行 Critic 校验']
+  tasks: ['定位视频章节与核心主题', '融合 ASR 与关键帧 OCR 证据', '提炼结论并进行 Critic 校验'],
 }
 
 export const DEMO_TRACE = {
@@ -17,14 +17,14 @@ export const DEMO_TRACE = {
     RETRIEVAL: 860,
     PLANNER: 1150,
     EXECUTOR: 3420,
-    CRITIC: 1260
-  }
+    CRITIC: 1260,
+  },
 }
 
 export const DEMO_EVALUATION = {
   structuredValid: true,
   evidenceSupportRate: 0.92,
-  criticPassed: true
+  criticPassed: true,
 }
 
 export const DEMO_RESULT = `## 二叉树遍历课程分析

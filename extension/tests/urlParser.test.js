@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { isSameVideo, isValidHttpUrl, normalizeHttpUrl, parseVideoUrl, videoKey, withTimestamp } from '../lib/urlParser.js'
+import {
+  isSameVideo,
+  isValidHttpUrl,
+  normalizeHttpUrl,
+  parseVideoUrl,
+  videoKey,
+  withTimestamp,
+} from '../lib/urlParser.js'
 
 test('识别 B 站视频页并保留查询参数', () => {
   const parsed = parseVideoUrl('https://www.bilibili.com/video/BV1xx411c7mD?p=2&spm_id_from=333')
@@ -62,11 +69,11 @@ test('手动粘贴兜底只校验 http/https 合法性', () => {
 test('videoKey 忽略查询参数差异，归一同一视频', () => {
   assert.equal(
     videoKey('https://www.bilibili.com/video/BV1xx411c7mD?spm_id_from=333.1007'),
-    videoKey('https://www.bilibili.com/video/BV1xx411c7mD?p=1')
+    videoKey('https://www.bilibili.com/video/BV1xx411c7mD?p=1'),
   )
   assert.equal(
     videoKey('https://www.youtube.com/watch?v=dQw4w9WgXcQ'),
-    videoKey('https://youtu.be/dQw4w9WgXcQ')
+    videoKey('https://youtu.be/dQw4w9WgXcQ'),
   )
 })
 
@@ -94,26 +101,29 @@ test('videoKey 对短链与未知站点返回 null，交由调用方拒绝操作
 test('isSameVideo 任一方无法判定时返回 false', () => {
   assert.equal(isSameVideo('https://b23.tv/ab12cd3', 'https://b23.tv/ab12cd3'), false)
   assert.equal(
-    isSameVideo('https://www.bilibili.com/video/BV1xx411c7mD', 'https://www.bilibili.com/video/BV2yy522d8nE'),
-    false
+    isSameVideo(
+      'https://www.bilibili.com/video/BV1xx411c7mD',
+      'https://www.bilibili.com/video/BV2yy522d8nE',
+    ),
+    false,
   )
 })
 
 test('withTimestamp 按站点附加正确的起播参数', () => {
   assert.equal(
     withTimestamp('https://www.bilibili.com/video/BV1xx411c7mD', 30),
-    'https://www.bilibili.com/video/BV1xx411c7mD?t=30'
+    'https://www.bilibili.com/video/BV1xx411c7mD?t=30',
   )
   assert.equal(
     withTimestamp('https://www.youtube.com/watch?v=dQw4w9WgXcQ', 30),
-    'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30s'
+    'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30s',
   )
 })
 
 test('withTimestamp 覆盖已有的 t 参数而非追加', () => {
   assert.equal(
     withTimestamp('https://www.bilibili.com/video/BV1xx411c7mD?t=5&p=2', 90),
-    'https://www.bilibili.com/video/BV1xx411c7mD?t=90&p=2'
+    'https://www.bilibili.com/video/BV1xx411c7mD?t=90&p=2',
   )
 })
 

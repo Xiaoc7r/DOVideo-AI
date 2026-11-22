@@ -1,19 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import {
-  ANALYSIS_STAGES,
-  analysisStageLabelOf,
-  analysisStageOf
-} from '../lib/stageProgress.js'
+import { ANALYSIS_STAGES, analysisStageLabelOf, analysisStageOf } from '../lib/stageProgress.js'
 
 test('侧边栏固定展示五个产品阶段', () => {
-  assert.deepEqual(ANALYSIS_STAGES.map(([key]) => key), [
-    'VIDEO_CONTEXT',
-    'RETRIEVAL',
-    'PLANNER',
-    'EXECUTOR',
-    'CRITIC'
-  ])
+  assert.deepEqual(
+    ANALYSIS_STAGES.map(([key]) => key),
+    ['VIDEO_CONTEXT', 'RETRIEVAL', 'PLANNER', 'EXECUTOR', 'CRITIC'],
+  )
 })
 
 test('映射后端实际发送的 TaskStage', () => {
@@ -33,7 +26,7 @@ test('映射后端实际发送的 TaskStage', () => {
     ANALYSIS_COMPLETED: 'CRITIC',
     ANALYSIS_COMPLETED_WITH_WARNINGS: 'CRITIC',
     COMPLETED: 'CRITIC',
-    COMPLETED_REUSED: 'CRITIC'
+    COMPLETED_REUSED: 'CRITIC',
   }
 
   for (const [serverStage, uiStage] of Object.entries(expected)) {

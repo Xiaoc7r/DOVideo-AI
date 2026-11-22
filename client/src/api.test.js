@@ -5,9 +5,9 @@ import { apiRequest, setAuthToken } from './api.js'
 beforeEach(() => {
   const storage = new Map()
   globalThis.localStorage = {
-    getItem: key => storage.get(key) ?? null,
+    getItem: (key) => storage.get(key) ?? null,
     setItem: (key, value) => storage.set(key, value),
-    removeItem: key => storage.delete(key)
+    removeItem: (key) => storage.delete(key),
   }
   globalThis.window = new EventTarget()
 })
@@ -24,9 +24,14 @@ test('API network failures produce an actionable message', async () => {
 test('a stale 401 cannot log out a newer login', async () => {
   setAuthToken('old-token')
   let respond
-  globalThis.fetch = () => new Promise(resolve => { respond = resolve })
+  globalThis.fetch = () =>
+    new Promise((resolve) => {
+      respond = resolve
+    })
   let expired = 0
-  window.addEventListener('auth-expired', () => { expired += 1 })
+  window.addEventListener('auth-expired', () => {
+    expired += 1
+  })
   const request = apiRequest('/media/list')
   setAuthToken('new-token')
   respond(new Response('expired', { status: 401 }))
@@ -39,7 +44,9 @@ test('a current 401 clears login and reports expiry once', async () => {
   setAuthToken('current-token')
   globalThis.fetch = async () => new Response('expired', { status: 401 })
   let expired = 0
-  window.addEventListener('auth-expired', () => { expired += 1 })
+  window.addEventListener('auth-expired', () => {
+    expired += 1
+  })
   await apiRequest('/media/list')
   assert.equal(localStorage.getItem('authToken'), null)
   assert.equal(expired, 1)

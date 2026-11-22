@@ -12,15 +12,16 @@ export function createSseFrameParser() {
       buffer = frames.pop() || ''
       const events = []
       for (const frame of frames) {
-        const data = frame.split(/\r?\n/)
-          .filter(line => line.startsWith('data:'))
-          .map(line => line.slice(5).trimStart())
+        const data = frame
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
           .join('\n')
         if (!data) continue
         events.push(JSON.parse(data))
       }
       return events
-    }
+    },
   }
 }
 

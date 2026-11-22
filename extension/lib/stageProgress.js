@@ -10,7 +10,7 @@ export const ANALYSIS_STAGES = Object.freeze([
   Object.freeze(['RETRIEVAL', '检索相关证据']),
   Object.freeze(['PLANNER', '拆解分析任务']),
   Object.freeze(['EXECUTOR', '生成结构化结果']),
-  Object.freeze(['CRITIC', '核验结论与证据'])
+  Object.freeze(['CRITIC', '核验结论与证据']),
 ])
 
 const SERVER_STAGE_TO_UI_STAGE = new Map([
@@ -29,7 +29,7 @@ const SERVER_STAGE_TO_UI_STAGE = new Map([
   ['ANALYSIS_COMPLETED', 'CRITIC'],
   ['ANALYSIS_COMPLETED_WITH_WARNINGS', 'CRITIC'],
   ['COMPLETED', 'CRITIC'],
-  ['COMPLETED_REUSED', 'CRITIC']
+  ['COMPLETED_REUSED', 'CRITIC'],
 ])
 
 /** 未知或非分析阶段返回 null；调用方应保留最后一个已知阶段。 */

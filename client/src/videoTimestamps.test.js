@@ -3,7 +3,7 @@ import test from 'node:test'
 import { marked } from 'marked'
 import { linkTimestampTokens } from './videoTimestamps.js'
 
-const render = markdown => marked.parser(linkTimestampTokens(marked.lexer(markdown)))
+const render = (markdown) => marked.parser(linkTimestampTokens(marked.lexer(markdown)))
 
 test('timestamps in prose, lists and tables link correctly, including long videos', () => {
   const html = render('**证据 [01:02]**\n\n- [123:45]\n\n| 时间 |\n| --- |\n| [2:03:04] |')
@@ -13,7 +13,8 @@ test('timestamps in prose, lists and tables link correctly, including long video
 })
 
 test('code, escaped timestamps and existing link destinations remain literal', () => {
-  const source = '`[01:02]`\n\n```js\nconst t = "[01:02]"\n```\n\n\\[01:02] [[01:02]](https://example.com)'
+  const source =
+    '`[01:02]`\n\n```js\nconst t = "[01:02]"\n```\n\n\\[01:02] [[01:02]](https://example.com)'
   const html = render(source)
   assert.doesNotMatch(html, /#video-t=/)
   assert.match(html, /<code>\[01:02\]<\/code>/)

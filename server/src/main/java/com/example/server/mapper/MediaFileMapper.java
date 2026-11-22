@@ -5,6 +5,4 @@ import com.example.server.entity.MediaFile;
 import org.apache.ibatis.annotations.Mapper;
 
 @Mapper
-public interface MediaFileMapper extends BaseMapper<MediaFile> {
-
-}
+public interface MediaFileMapper extends BaseMapper<MediaFile> {}

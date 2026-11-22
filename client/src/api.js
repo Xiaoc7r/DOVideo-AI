@@ -41,11 +41,13 @@ export function clearAuthToken() {
 // 若后端将来配置了 non_null 序列化（data 键被省略），依赖 data 会让所有错误响应
 // 退回透传，用户就会看到整串原始 JSON。
 function isEnvelope(payload) {
-  return payload !== null
-    && typeof payload === 'object'
-    && !Array.isArray(payload)
-    && typeof payload.code === 'number'
-    && 'message' in payload
+  return (
+    payload !== null &&
+    typeof payload === 'object' &&
+    !Array.isArray(payload) &&
+    typeof payload.code === 'number' &&
+    'message' in payload
+  )
 }
 
 /** 把 data 转成文本：字符串直接用，空值给空串，其余序列化。 */
@@ -65,8 +67,8 @@ function unwrap(response, envelope) {
     redirected: response.redirected,
     url: response.url,
     json: async () => payload,
-    text: async () => (response.ok ? dataAsText(payload) : (envelope.message || '')),
-    raw: response
+    text: async () => (response.ok ? dataAsText(payload) : envelope.message || ''),
+    raw: response,
   }
 }
 

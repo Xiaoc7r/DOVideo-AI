@@ -2,9 +2,31 @@ import { marked } from 'marked'
 import { linkTimestampTokens } from './videoTimestamps.js'
 
 const ALLOWED_TAGS = new Set([
-  'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'P', 'BR', 'HR', 'BLOCKQUOTE',
-  'UL', 'OL', 'LI', 'STRONG', 'EM', 'DEL', 'CODE', 'PRE', 'A',
-  'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD'
+  'H1',
+  'H2',
+  'H3',
+  'H4',
+  'H5',
+  'H6',
+  'P',
+  'BR',
+  'HR',
+  'BLOCKQUOTE',
+  'UL',
+  'OL',
+  'LI',
+  'STRONG',
+  'EM',
+  'DEL',
+  'CODE',
+  'PRE',
+  'A',
+  'TABLE',
+  'THEAD',
+  'TBODY',
+  'TR',
+  'TH',
+  'TD',
 ])
 
 export function renderMarkdown(markdown) {
@@ -27,8 +49,8 @@ function sanitizeNode(node) {
   }
 
   for (const attribute of [...node.attributes]) {
-    const allowed = node.tagName === 'A'
-      && (attribute.name === 'href' || attribute.name === 'title')
+    const allowed =
+      node.tagName === 'A' && (attribute.name === 'href' || attribute.name === 'title')
     if (!allowed) node.removeAttribute(attribute.name)
   }
   if (node.tagName !== 'A') return
