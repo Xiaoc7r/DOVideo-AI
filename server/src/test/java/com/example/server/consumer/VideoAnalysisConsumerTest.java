@@ -17,6 +17,15 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 class VideoAnalysisConsumerTest {
+  @Test
+  void workerConcurrencyIsBoundedBeforeStartingTheBrokerConsumer() {
+    org.apache.rocketmq.client.consumer.DefaultMQPushConsumer brokerConsumer =
+        mock(org.apache.rocketmq.client.consumer.DefaultMQPushConsumer.class);
+    consumer.prepareStart(brokerConsumer);
+    verify(brokerConsumer).setConsumeThreadMin(2);
+    verify(brokerConsumer).setConsumeThreadMax(2);
+  }
+
   private final AiService ai = mock(AiService.class);
   private final StringRedisTemplate redis = mock(StringRedisTemplate.class);
   private final AgentCheckpointService checkpoints = mock(AgentCheckpointService.class);
@@ -45,7 +54,8 @@ class VideoAnalysisConsumerTest {
             mock(FailedAnalysisTaskService.class),
             media,
             events,
-            "dead-letter");
+            "dead-letter",
+            2);
   }
 
   @Test

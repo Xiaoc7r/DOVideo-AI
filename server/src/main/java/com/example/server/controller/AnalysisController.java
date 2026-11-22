@@ -104,7 +104,7 @@ public class AnalysisController {
       @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
     String normalizedGoal = normalizeText(goal, "分析目标");
     AnalysisMode analysisMode = AnalysisMode.fromRequest(mode);
-    MediaFile mediaFile = mediaService.requireOwnedMedia(id, userId);
+    MediaFile mediaFile = mediaService.requireOwnedMetadata(id, userId);
     if (checkpointService.loadResult(id, normalizedGoal, analysisMode) != null) {
       // 已有可复用结果，是“已完成”而非“已受理”，用 200 与异步受理区分开。
       return ResponseEntity.ok(Result.ok());
@@ -122,7 +122,7 @@ public class AnalysisController {
       @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
     String normalizedQuestion = normalizeText(question, "追问内容");
     String normalizedGoal = goal == null || goal.isBlank() ? null : normalizeText(goal, "原始分析目标");
-    mediaService.requireOwnedMedia(id, userId);
+    mediaService.requireOwnedMetadata(id, userId);
     requireVideoContext(id);
     dispatchService.requireAiQuota(userId);
     AnalysisMode analysisMode = AnalysisMode.fromRequest(mode);
@@ -135,7 +135,7 @@ public class AnalysisController {
       @RequestParam Long id,
       @RequestParam String query,
       @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
-    mediaService.requireOwnedMedia(id, userId);
+    mediaService.requireOwnedMetadata(id, userId);
     requireVideoContext(id);
     dispatchService.requireAiQuota(userId);
     String normalizedQuery = normalizeText(query, "检索问题");
@@ -147,7 +147,7 @@ public class AnalysisController {
       @Valid @RequestBody AgentFeedback feedback,
       @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
     ensureRating(feedback);
-    mediaService.requireOwnedMedia(feedback.mediaId(), userId);
+    mediaService.requireOwnedMetadata(feedback.mediaId(), userId);
     checkpointService.saveFeedback(feedback.normalized(AnalysisMode.fromRequest(feedback.mode())));
     return Result.ok();
   }
@@ -158,7 +158,7 @@ public class AnalysisController {
       @RequestParam(required = false) String mode,
       @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
     ensureRating(feedback);
-    MediaFile mediaFile = mediaService.requireOwnedMedia(feedback.mediaId(), userId);
+    MediaFile mediaFile = mediaService.requireOwnedMetadata(feedback.mediaId(), userId);
     String revisedGoal = aiService.revisionGoal(feedback);
     AnalysisMode analysisMode =
         AnalysisMode.fromRequest(mode == null || mode.isBlank() ? feedback.mode() : mode);
@@ -169,7 +169,7 @@ public class AnalysisController {
   @GetMapping("/agent-feedback")
   public Result<List<AgentFeedback>> agentFeedback(
       @RequestParam Long id, @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
-    mediaService.requireOwnedMedia(id, userId);
+    mediaService.requireOwnedMetadata(id, userId);
     return Result.ok(checkpointService.loadFeedback(id));
   }
 
@@ -179,7 +179,7 @@ public class AnalysisController {
       @RequestParam String goal,
       @RequestParam(required = false) String mode,
       @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
-    mediaService.requireOwnedMedia(id, userId);
+    mediaService.requireOwnedMetadata(id, userId);
     return Result.ok(
         checkpointService.loadPlan(
             id, normalizeText(goal, "分析目标"), AnalysisMode.fromRequest(mode)));
@@ -191,7 +191,7 @@ public class AnalysisController {
       @RequestParam String goal,
       @RequestParam(required = false) String mode,
       @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
-    mediaService.requireOwnedMedia(id, userId);
+    mediaService.requireOwnedMetadata(id, userId);
     String normalizedGoal = normalizeText(goal, "分析目标");
     return Result.ok(statusService.current(id, normalizedGoal, AnalysisMode.fromRequest(mode)));
   }
@@ -202,7 +202,7 @@ public class AnalysisController {
       @RequestParam String goal,
       @RequestParam(required = false) String mode,
       @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
-    mediaService.requireOwnedMedia(id, userId);
+    mediaService.requireOwnedMetadata(id, userId);
     String normalizedGoal = normalizeText(goal, "分析目标");
     AnalysisMode analysisMode = AnalysisMode.fromRequest(mode);
     return taskEventService.subscribe(
@@ -222,7 +222,7 @@ public class AnalysisController {
       @RequestParam String goal,
       @RequestParam(required = false) String mode,
       @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
-    mediaService.requireOwnedMedia(id, userId);
+    mediaService.requireOwnedMetadata(id, userId);
     return Result.ok(
         evaluationService.evaluate(
             id, normalizeText(goal, "分析目标"), AnalysisMode.fromRequest(mode)));
@@ -234,7 +234,7 @@ public class AnalysisController {
       @RequestParam String goal,
       @RequestParam(required = false) String mode,
       @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
-    mediaService.requireOwnedMedia(id, userId);
+    mediaService.requireOwnedMetadata(id, userId);
     return Result.ok(
         telemetry.latest(id, normalizeText(goal, "分析目标"), AnalysisMode.fromRequest(mode)));
   }

@@ -5,6 +5,7 @@ import com.example.server.mapper.AgentCheckpointMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -148,8 +149,10 @@ public class AgentCheckpointRepository {
 
   private void cacheField(String key, String field, String payload, String stage) {
     try {
-      redisTemplate.opsForHash().put(key, field, payload);
-      if (stage != null) redisTemplate.opsForHash().put(key, "stage", stage);
+      redisTemplate
+          .opsForHash()
+          .putAll(
+              key, stage == null ? Map.of(field, payload) : Map.of(field, payload, "stage", stage));
       redisTemplate.expire(key, CACHE_TTL);
     } catch (RuntimeException e) {
       log.warn("agent_checkpoint_cache_write_failed key={} field={}", key, field, e);

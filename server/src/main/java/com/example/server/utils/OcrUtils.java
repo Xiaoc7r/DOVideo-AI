@@ -4,7 +4,7 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.concurrent.TimeUnit;
+import java.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,29 +16,27 @@ public class OcrUtils {
   private static final Logger log = LoggerFactory.getLogger(OcrUtils.class);
 
   private final String ocrCommand;
+  private final MediaProcessRunner processes;
 
-  public OcrUtils(@Value("${tool.ocr.command:tesseract}") String ocrCommand) {
+  public OcrUtils(
+      @Value("${tool.ocr.command:tesseract}") String ocrCommand, MediaProcessRunner processes) {
     this.ocrCommand = ocrCommand;
+    this.processes = processes;
   }
 
   public String recognize(File image) {
     if (image == null || !image.isFile())
       throw new IllegalArgumentException("OCR image does not exist");
-    Process process = null;
     Path output = null;
     try {
       output = Files.createTempFile("dovideo-ocr-", ".txt");
-      process =
+      ProcessBuilder process =
           new ProcessBuilder(ocrCommand, image.getAbsolutePath(), "stdout", "-l", "chi_sim+eng")
               .redirectErrorStream(true)
-              .redirectOutput(output.toFile())
-              .start();
-      if (!process.waitFor(2, TimeUnit.MINUTES)) {
-        process.destroyForcibly();
-        throw new IllegalStateException("OCR execution timed out");
-      }
-      if (process.exitValue() != 0) {
-        throw new IllegalStateException("OCR process failed with exit code " + process.exitValue());
+              .redirectOutput(output.toFile());
+      int exitCode = processes.run(process, Duration.ofMinutes(2));
+      if (exitCode != 0) {
+        throw new IllegalStateException("OCR process failed with exit code " + exitCode);
       }
       return Files.readString(output, StandardCharsets.UTF_8).trim();
     } catch (InterruptedException e) {
@@ -47,7 +45,6 @@ public class OcrUtils {
     } catch (Exception e) {
       throw new IllegalStateException("OCR failed for " + image.getName(), e);
     } finally {
-      if (process != null && process.isAlive()) process.destroyForcibly();
       if (output != null) {
         try {
           Files.deleteIfExists(output);

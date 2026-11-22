@@ -18,6 +18,40 @@ import org.springframework.data.redis.core.ValueOperations;
 
 class MediaServiceTest {
   @Test
+  void metadataLookupExcludesLargeTextAndStillEnforcesOwnership() {
+    MediaFileMapper mapper = mock(MediaFileMapper.class);
+    MediaService service =
+        new MediaService(
+            mapper,
+            mock(StringRedisTemplate.class),
+            mock(MinioUtils.class),
+            new ObjectMapper(),
+            mock(AgentCheckpointService.class),
+            mock(AgentTelemetry.class),
+            mock(QdrantVectorStore.class),
+            mock(VideoContextService.class));
+    MediaFile owned = new MediaFile();
+    owned.setId(42L);
+    owned.setUserId(7L);
+    when(mapper.selectOne(any()))
+        .thenAnswer(
+            call -> {
+              com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<MediaFile> query =
+                  call.getArgument(0);
+              assertFalse(query.getSqlSelect().contains("transcript_text"));
+              assertFalse(query.getSqlSelect().contains("ai_summary"));
+              assertTrue(query.getSqlSelect().contains("user_id"));
+              return owned;
+            });
+    assertSame(owned, service.requireOwnedMetadata(42L, 7L));
+    assertThrows(SecurityException.class, () -> service.requireOwnedMetadata(42L, 8L));
+    doReturn(null).when(mapper).selectOne(any());
+    assertThrows(
+        java.util.NoSuchElementException.class, () -> service.requireOwnedMetadata(42L, 7L));
+    verify(mapper, never()).selectById(anyLong());
+  }
+
+  @Test
   void deletionAttemptsIndependentCleanupAndInvalidatesListAfterFailures() {
     MediaFileMapper mapper = mock(MediaFileMapper.class);
     StringRedisTemplate redis = mock(StringRedisTemplate.class);

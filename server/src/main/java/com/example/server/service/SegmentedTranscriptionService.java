@@ -2,13 +2,14 @@ package com.example.server.service;
 
 import com.example.server.dto.TranscriptSegment;
 import com.example.server.utils.AliyunAsrUtils;
+import com.example.server.utils.MediaProcessRunner;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -21,17 +22,36 @@ public class SegmentedTranscriptionService {
 
   private final AliyunAsrUtils aliyunAsrUtils;
   private final AgentTelemetry telemetry;
+  private final MediaProcessRunner processes;
 
-  public SegmentedTranscriptionService(AliyunAsrUtils aliyunAsrUtils, AgentTelemetry telemetry) {
+  public SegmentedTranscriptionService(
+      AliyunAsrUtils aliyunAsrUtils, AgentTelemetry telemetry, MediaProcessRunner processes) {
     this.aliyunAsrUtils = aliyunAsrUtils;
     this.telemetry = telemetry;
+    this.processes = processes;
   }
 
   public List<TranscriptSegment> transcribe(String videoPath, Path audioDir, String traceId)
       throws Exception {
     Files.createDirectories(audioDir);
     Path outputPattern = audioDir.resolve("audio_%03d.mp3");
-    runFfmpeg(videoPath, outputPattern);
+    processes.ffmpeg(
+        List.of(
+            "-y",
+            "-i",
+            videoPath,
+            "-vn",
+            "-acodec",
+            "libmp3lame",
+            "-f",
+            "segment",
+            "-segment_time",
+            "60",
+            "-reset_timestamps",
+            "1",
+            outputPattern.toString()),
+        null,
+        Duration.ofMinutes(15));
 
     List<Path> audioFiles;
     try (var paths = Files.list(audioDir)) {
@@ -42,6 +62,7 @@ public class SegmentedTranscriptionService {
     int failedSegments = 0;
     RuntimeException lastSegmentError = null;
     for (int i = 0; i < audioFiles.size(); i++) {
+      if (Thread.currentThread().isInterrupted()) throw new InterruptedException("ASR interrupted");
       Path audioFile = audioFiles.get(i);
       try {
         telemetry.increment(traceId, "asrCalls", 1);
@@ -74,43 +95,10 @@ public class SegmentedTranscriptionService {
           .filter(text -> !text.isBlank())
           .collect(java.util.stream.Collectors.joining("\n"));
     } catch (Exception e) {
+      if (e instanceof InterruptedException) Thread.currentThread().interrupt();
       throw new IllegalStateException("视频转写失败", e);
     } finally {
       deleteDirectory(workDir);
-    }
-  }
-
-  private void runFfmpeg(String videoPath, Path outputPattern) throws Exception {
-    Process process =
-        new ProcessBuilder(
-                "ffmpeg",
-                "-y",
-                "-i",
-                videoPath,
-                "-vn",
-                "-acodec",
-                "libmp3lame",
-                "-f",
-                "segment",
-                "-segment_time",
-                "60",
-                "-reset_timestamps",
-                "1",
-                outputPattern.toString())
-            .redirectErrorStream(true)
-            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-            .start();
-    try {
-      if (!process.waitFor(15, TimeUnit.MINUTES)) {
-        process.destroyForcibly();
-        throw new IllegalStateException("FFmpeg 执行超时");
-      }
-      if (process.exitValue() != 0) throw new IllegalStateException("FFmpeg 执行失败");
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      throw e;
-    } finally {
-      if (process.isAlive()) process.destroyForcibly();
     }
   }
 

@@ -5,10 +5,10 @@ import java.net.InetAddress;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -28,16 +28,19 @@ public class YtDlpUtils {
   private final String ffmpegDir;
   private final String cookiesFile;
   private final String cookiesFromBrowser;
+  private final MediaProcessRunner processes;
 
   public YtDlpUtils(
       @Value("${tool.ytdlp.path}") String ytDlpPath,
       @Value("${tool.ffmpeg.dir}") String ffmpegDir,
       @Value("${tool.ytdlp.cookies:}") String cookiesFile,
-      @Value("${tool.ytdlp.cookies-from-browser:}") String cookiesFromBrowser) {
+      @Value("${tool.ytdlp.cookies-from-browser:}") String cookiesFromBrowser,
+      MediaProcessRunner processes) {
     this.ytDlpPath = ytDlpPath;
     this.ffmpegDir = ffmpegDir;
     this.cookiesFile = cookiesFile;
     this.cookiesFromBrowser = cookiesFromBrowser;
+    this.processes = processes;
   }
 
   public File downloadVideo(String url) throws Exception {
@@ -83,18 +86,10 @@ public class YtDlpUtils {
     command.add(outputPath.toString());
     command.add(url);
 
-    Process process = null;
     try {
-      process =
-          new ProcessBuilder(command)
-              .redirectErrorStream(true)
-              .redirectOutput(logPath.toFile())
-              .start();
-      if (!process.waitFor(30, TimeUnit.MINUTES)) {
-        process.destroyForcibly();
-        throw new IllegalStateException("视频链接下载超时");
-      }
-      if (process.exitValue() != 0 || !Files.isRegularFile(outputPath)) {
+      ProcessBuilder process =
+          new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(logPath.toFile());
+      if (processes.run(process, Duration.ofMinutes(30)) != 0 || !Files.isRegularFile(outputPath)) {
         String logs = Files.readString(logPath);
         throw new IllegalStateException("yt-dlp 下载失败: " + recentLogs(logs));
       }
@@ -104,11 +99,11 @@ public class YtDlpUtils {
           Files.size(outputPath));
       return outputPath.toFile();
     } catch (Exception e) {
+      if (e instanceof InterruptedException) Thread.currentThread().interrupt();
       Files.deleteIfExists(outputPath);
       throw e;
     } finally {
       Files.deleteIfExists(logPath);
-      if (process != null && process.isAlive()) process.destroyForcibly();
     }
   }
 

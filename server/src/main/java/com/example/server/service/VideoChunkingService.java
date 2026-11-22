@@ -38,16 +38,15 @@ public class VideoChunkingService {
     if (orderedSegments.isEmpty()) return List.of();
 
     List<VideoChunk> chunks = new ArrayList<>();
-    for (long start = 0;
-        start <= orderedSegments.get(orderedSegments.size() - 1).startMs();
-        start += CHUNK_MS) {
+    int cursor = 0;
+    while (cursor < orderedSegments.size()) {
+      long start = orderedSegments.get(cursor).startMs() / CHUNK_MS * CHUNK_MS;
       long end = start + CHUNK_MS;
-      long chunkStart = start;
-      List<VideoContext.VideoSegment> rawSegments =
-          orderedSegments.stream()
-              .filter(segment -> segment.startMs() >= chunkStart && segment.startMs() < end)
-              .toList();
-      if (rawSegments.isEmpty()) continue;
+      int first = cursor;
+      while (cursor < orderedSegments.size() && orderedSegments.get(cursor).startMs() < end) {
+        cursor++;
+      }
+      List<VideoContext.VideoSegment> rawSegments = orderedSegments.subList(first, cursor);
 
       VideoChunk.ChunkSummary summary = summarize(rawSegments);
       List<String> keywords = normalizeTexts(summary.keywords());

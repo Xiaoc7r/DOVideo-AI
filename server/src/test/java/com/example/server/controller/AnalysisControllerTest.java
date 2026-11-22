@@ -19,7 +19,7 @@ class AnalysisControllerTest {
     AnalysisDispatchService dispatch = mock(AnalysisDispatchService.class);
     MediaService media = mock(MediaService.class);
     MediaFile owned = new MediaFile();
-    when(media.requireOwnedMedia(7L, 3L)).thenReturn(owned);
+    when(media.requireOwnedMetadata(7L, 3L)).thenReturn(owned);
     when(ai.revisionGoal(any())).thenReturn("goal");
     when(dispatch.submit(any(), anyString(), any(), any()))
         .thenReturn(AnalysisDispatchService.SubmissionResult.ACCEPTED);

@@ -62,7 +62,7 @@
 > 把大文件上传与耗时的视频解析从请求主链路中剥离，提交即返回，不阻塞、不重复烧钱。
 
 - **分片上传 + 断点续传** — 前端按 5 MB 分片，Redis 记录已完成分片，MinIO 保存合并后的视频，弱网中断后可从断点续传。
-- **异步削峰** — RocketMQ 将视频解析移出请求线程，提交后立即返回任务 ID；Redisson 按「内容指纹 + 分析目标」加锁，拦截并发与重复消费。
+- **异步削峰** — RocketMQ 将视频解析移出请求线程，提交后立即返回任务 ID；任务按「媒体记录 + 分析目标 + 模式」隔离，同内容结果通过共享锁复用，避免重复消费和重复计算。
 - **成本护栏** — 用户级与全局令牌桶限制 AI 请求速率；ASR 与模型调用采用有限次数的指数退避重试，兜底第三方网络抖动。
 
 ### 🧩 时序多模态 VideoContext
@@ -254,10 +254,21 @@ docker compose --env-file .env down
 DoVideoAI
 ├── client/              # Vue 3 工作台
 ├── server/              # Spring Boot API 与 Video Agent
+├── extension/           # Chrome 侧栏扩展与回归测试
+├── docs/                # 设计、审查报告与项目截图
+├── scripts/             # 本地启动脚本
 ├── rocketmq/            # Broker 配置
 ├── docker-compose.yml   # 中间件编排
 └── .env.example         # 本地配置模板
 ```
+
+## 性能与开发规范
+
+默认每个后端实例同时处理 2 个分析消息、运行最多 2 个媒体工具进程；FFmpeg 编解码与滤镜、OCR 的线程预算默认为 1。可以在 `.env` 中通过 `ANALYSIS_WORKER_CONCURRENCY`、`MEDIA_MAX_PROCESSES`、`MEDIA_PROCESS_THREADS` 调整。限制作用于单个后端实例，多实例部署需要按总机器容量分配预算。重负载会排队，媒体工具等待超过 30 秒时提示繁忙，不应通过无限提高并发来消除排队。
+
+知识分块与视频预处理分别复用已有检查点，网页资料卡片独立渲染，JSON/文本响应启用压缩。音频、关键帧和分析模式保留原有参数与输出要求。
+
+Java 使用 Google Java Format，网页与扩展使用 Prettier，CI 检查格式、分层依赖与功能回归。开发命令及目录职责见 [贡献规范](CONTRIBUTING.md)，实测结果和边界见 [性能与代码治理报告](docs/performance-review-2026-11-22.md)。
 
 ## License
 

@@ -2,6 +2,7 @@ package com.example.server.service;
 
 import com.example.server.dto.TranscriptSegment;
 import com.example.server.dto.VideoContext;
+import com.example.server.utils.MediaProcessRunner;
 import com.example.server.utils.MinioUtils;
 import com.example.server.utils.OcrUtils;
 import java.awt.Graphics2D;
@@ -9,6 +10,7 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -47,6 +49,7 @@ public class VideoContextService {
   private final ThreadPoolTaskExecutor asrExecutor;
   private final ThreadPoolTaskExecutor ocrExecutor;
   private final AgentTelemetry telemetry;
+  private final MediaProcessRunner processes;
 
   public VideoContextService(
       SegmentedTranscriptionService transcriptionService,
@@ -54,13 +57,15 @@ public class VideoContextService {
       MinioUtils minioUtils,
       @Qualifier("asrExecutor") ThreadPoolTaskExecutor asrExecutor,
       @Qualifier("ocrExecutor") ThreadPoolTaskExecutor ocrExecutor,
-      AgentTelemetry telemetry) {
+      AgentTelemetry telemetry,
+      MediaProcessRunner processes) {
     this.transcriptionService = transcriptionService;
     this.ocrUtils = ocrUtils;
     this.minioUtils = minioUtils;
     this.asrExecutor = asrExecutor;
     this.ocrExecutor = ocrExecutor;
     this.telemetry = telemetry;
+    this.processes = processes;
   }
 
   public VideoContext build(String videoPath, String userGoal) {
@@ -221,7 +226,6 @@ public class VideoContextService {
     List<Long> timestamps = new ArrayList<>();
     runCommand(
         List.of(
-            "ffmpeg",
             "-y",
             "-i",
             videoPath,
@@ -243,6 +247,7 @@ public class VideoContextService {
     Long previousHash = null;
     int failedFrames = 0;
     for (int i = 0; i < frameFiles.size(); i++) {
+      if (Thread.currentThread().isInterrupted()) throw new InterruptedException("OCR interrupted");
       long imageHash = differenceHash(frameFiles.get(i).toFile());
       if (previousHash != null && Long.bitCount(previousHash ^ imageHash) <= 5) {
         continue;
@@ -333,18 +338,8 @@ public class VideoContextService {
 
   private void runCommand(List<String> command, List<Long> timestamps) throws Exception {
     Path logPath = Files.createTempFile("dovideo-ffmpeg-", ".log");
-    Process process = null;
     try {
-      process =
-          new ProcessBuilder(command)
-              .redirectErrorStream(true)
-              .redirectOutput(logPath.toFile())
-              .start();
-      if (!process.waitFor(15, TimeUnit.MINUTES)) {
-        process.destroyForcibly();
-        throw new IllegalStateException("FFmpeg 执行超时");
-      }
-      if (process.exitValue() != 0) throw new IllegalStateException("FFmpeg 执行失败");
+      processes.ffmpeg(command, logPath, Duration.ofMinutes(15));
       if (timestamps != null) {
         try (Stream<String> lines = Files.lines(logPath)) {
           lines.forEach(line -> appendTimestamp(line, timestamps));
@@ -354,7 +349,6 @@ public class VideoContextService {
       Thread.currentThread().interrupt();
       throw e;
     } finally {
-      if (process != null && process.isAlive()) process.destroyForcibly();
       Files.deleteIfExists(logPath);
     }
   }

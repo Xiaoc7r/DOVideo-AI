@@ -9,6 +9,9 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -21,16 +24,19 @@ public class LongVideoContextService {
   private final AgentCheckpointService checkpointService;
   private final VideoChunkingService chunkingService;
   private final VideoEvidenceRetrievalService retrievalService;
+  private final RedissonClient redissonClient;
 
   public LongVideoContextService(
       AgentTelemetry telemetry,
       AgentCheckpointService checkpointService,
       VideoChunkingService chunkingService,
-      VideoEvidenceRetrievalService retrievalService) {
+      VideoEvidenceRetrievalService retrievalService,
+      RedissonClient redissonClient) {
     this.telemetry = telemetry;
     this.checkpointService = checkpointService;
     this.chunkingService = chunkingService;
     this.retrievalService = retrievalService;
+    this.redissonClient = redissonClient;
   }
 
   public VideoContext selectRelevant(VideoContext context) {
@@ -121,17 +127,35 @@ public class LongVideoContextService {
   }
 
   private List<VideoChunk> resolveChunks(Long mediaId, List<VideoContext.VideoSegment> segments) {
-    List<VideoChunk> chunks = mediaId == null ? null : checkpointService.loadChunks(mediaId);
+    if (mediaId == null) return chunkingService.build(segments);
+    List<VideoChunk> chunks = checkpointService.loadChunks(mediaId);
     if (chunks != null && !chunks.isEmpty()) {
       telemetry.incrementCurrent("chunkCheckpointHits", 1);
       return chunks;
     }
 
-    chunks = chunkingService.build(segments);
-    if (mediaId != null) {
+    RLock lock = redissonClient.getLock("lock:analysis-chunks:" + mediaId);
+    boolean acquired = false;
+    try {
+      long waitMillis = Math.min(30_000L, AgentExecutionBudget.remainingMillis());
+      acquired = lock.tryLock(waitMillis, TimeUnit.MILLISECONDS);
+      AgentExecutionBudget.check("知识分块等待");
+      if (!acquired) throw new IllegalStateException("视频知识分块正在生成，请稍后重试");
+      // Different goals and evidence searches share the same durable chunks.
+      chunks = checkpointService.loadChunks(mediaId);
+      if (chunks != null && !chunks.isEmpty()) {
+        telemetry.incrementCurrent("chunkCheckpointHits", 1);
+        return chunks;
+      }
+      chunks = chunkingService.build(segments);
       checkpointService.saveChunks(mediaId, chunks);
       retrievalService.index(mediaId, chunks);
+      return chunks;
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("等待视频知识分块时被中断", e);
+    } finally {
+      if (acquired && lock.isHeldByCurrentThread()) lock.unlock();
     }
-    return chunks;
   }
 }

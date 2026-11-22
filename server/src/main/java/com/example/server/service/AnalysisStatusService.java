@@ -25,8 +25,18 @@ public class AnalysisStatusService {
   public TaskStatus current(Long mediaId, String goal, AnalysisMode mode) {
     // The last successful result is retained until the worker applies a revision.
     // It must not terminate the new revision's SSE stream while that revision is queued.
-    if (checkpointService.isRevisionPending(mediaId, goal, mode)
-        && dispatchService.isActive(mediaId, goal, mode)) {
+    boolean active;
+    try {
+      active = dispatchService.isActive(mediaId, goal, mode);
+    } catch (RuntimeException stateError) {
+      // Keep completed results readable during cache outages without completing a pending revision.
+      if (!checkpointService.isRevisionPending(mediaId, goal, mode)) {
+        AgentState saved = checkpointService.loadResult(mediaId, goal, mode);
+        if (saved != null && saved.result() != null) return TaskStatus.completed(saved);
+      }
+      throw stateError;
+    }
+    if (active && checkpointService.isRevisionPending(mediaId, goal, mode)) {
       return TaskStatus.of(TaskStatus.State.QUEUED, "修订任务已排队，等待按新计划执行");
     }
     AgentState result = checkpointService.loadResult(mediaId, goal, mode);
@@ -35,7 +45,7 @@ public class AnalysisStatusService {
     }
 
     TaskStage stage = checkpointService.loadStage(mediaId, goal, mode);
-    if (dispatchService.isActive(mediaId, goal, mode)) {
+    if (active) {
       TaskStatus.State state =
           stage == null ? TaskStatus.State.QUEUED : TaskStatus.State.PROCESSING;
       return TaskStatus.of(state, statusMessage(stage));

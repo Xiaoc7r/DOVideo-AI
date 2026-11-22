@@ -14,8 +14,10 @@ import com.example.server.service.TaskEventService;
 import com.example.server.utils.AnalysisTaskKeys;
 import java.time.Duration;
 import java.util.NoSuchElementException;
+import org.apache.rocketmq.client.consumer.DefaultMQPushConsumer;
 import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
+import org.apache.rocketmq.spring.core.RocketMQPushConsumerLifecycleListener;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
@@ -33,12 +35,10 @@ import org.springframework.stereotype.Component;
     // MAX_DELIVERY_ATTEMPTS（计投递次数）对齐。不设的话，一旦异常发生在 Redis 计数之前，
     // 应用侧上限失效，会退化成 MQ 默认的 16 次重投空转。
     //
-    // 消费并发（consumeThreadNumber / consumeThreadMax）刻意没有在这里设置：
-    // 两个属性名在 rocketmq-spring 各版本间有变更（consumeThreadMax 自 2.2.x 起废弃），
-    // 若与容器默认的 min 值冲突会在启动期抛 "consumeThreadMin is larger than consumeThreadMax"。
-    // 本环境无法编译校验属性名，故留给确认版本后再补，避免引入启动失败风险。
+    // Worker concurrency is configured together in prepareStart before the consumer starts.
     maxReconsumeTimes = 2)
-public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> {
+public class VideoAnalysisConsumer
+    implements RocketMQListener<AnalysisTaskMsg>, RocketMQPushConsumerLifecycleListener {
 
   private static final Logger log = LoggerFactory.getLogger(VideoAnalysisConsumer.class);
 
@@ -59,6 +59,7 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
   private final MediaService mediaService;
   private final TaskEventService taskEventService;
   private final String deadLetterTopic;
+  private final int workerConcurrency;
 
   public VideoAnalysisConsumer(
       AiService aiService,
@@ -70,7 +71,10 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
       MediaService mediaService,
       TaskEventService taskEventService,
       @Value("${rocketmq.topic.video-analysis-dead:video-analysis-dead-topic}")
-          String deadLetterTopic) {
+          String deadLetterTopic,
+      @Value("${rocketmq.consumer.concurrency:2}") int workerConcurrency) {
+    if (workerConcurrency < 1)
+      throw new IllegalArgumentException("Worker concurrency must be positive");
     this.aiService = aiService;
     this.redissonClient = redissonClient;
     this.redisTemplate = redisTemplate;
@@ -80,6 +84,13 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
     this.mediaService = mediaService;
     this.taskEventService = taskEventService;
     this.deadLetterTopic = deadLetterTopic;
+    this.workerConcurrency = workerConcurrency;
+  }
+
+  @Override
+  public void prepareStart(DefaultMQPushConsumer consumer) {
+    consumer.setConsumeThreadMin(workerConcurrency);
+    consumer.setConsumeThreadMax(workerConcurrency);
   }
 
   @Override

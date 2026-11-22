@@ -166,7 +166,8 @@ public class MediaService {
   }
 
   public boolean exists(Long mediaId) {
-    return mediaId != null && mediaFileMapper.selectById(mediaId) != null;
+    return mediaId != null
+        && mediaFileMapper.exists(new QueryWrapper<MediaFile>().eq("id", mediaId));
   }
 
   public void purgeRuntimeArtifacts(Long mediaId) {
@@ -236,7 +237,19 @@ public class MediaService {
   }
 
   public MediaFile requireOwnedMedia(Long mediaId, Long userId) {
-    MediaFile mediaFile = mediaFileMapper.selectById(mediaId);
+    return checkOwner(mediaFileMapper.selectById(mediaId), userId);
+  }
+
+  public MediaFile requireOwnedMetadata(Long mediaId, Long userId) {
+    return checkOwner(
+        mediaFileMapper.selectOne(
+            new QueryWrapper<MediaFile>()
+                .select("id", "user_id", "filename", "file_path", "content_hash", "status")
+                .eq("id", mediaId)),
+        userId);
+  }
+
+  private MediaFile checkOwner(MediaFile mediaFile, Long userId) {
     if (mediaFile == null) throw new NoSuchElementException("文件不存在");
     if (!Objects.equals(mediaFile.getUserId(), userId)) {
       throw new SecurityException("无权访问该文件");

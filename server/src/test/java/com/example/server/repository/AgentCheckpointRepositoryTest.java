@@ -29,6 +29,13 @@ class AgentCheckpointRepositoryTest {
             })
         .when(hashes)
         .put(eq("key"), any(), any());
+    doAnswer(
+            call -> {
+              cache.putAll(call.getArgument(1));
+              return null;
+            })
+        .when(hashes)
+        .putAll(eq("key"), anyMap());
     AgentCheckpointMapper mapper = mock(AgentCheckpointMapper.class);
     when(mapper.findPayload(7L, "goal:plan"))
         .thenReturn("{\"understoodGoal\":\"goal\",\"tasks\":[\"task\"]}");
@@ -40,5 +47,17 @@ class AgentCheckpointRepositoryTest {
     assertNotNull(repository.read(7L, "goal:plan", "key", "plan", AgentState.AgentPlan.class));
     assertEquals(TaskStage.CRITIC_STARTED, repository.readStage(7L, "goal:stage", "key"));
     assertEquals("CRITIC_STARTED", cache.get("stage"));
+  }
+
+  @Test
+  void stageAndPayloadUseOneAtomicHashWrite() {
+    StringRedisTemplate redis = mock(StringRedisTemplate.class);
+    HashOperations<String, Object, Object> hashes = mock(HashOperations.class);
+    when(redis.opsForHash()).thenReturn(hashes);
+    AgentCheckpointRepository repository =
+        new AgentCheckpointRepository(redis, new ObjectMapper(), mock(AgentCheckpointMapper.class));
+    repository.write(7L, "plan", "stage", "key", "plan", TaskStage.PLAN_COMPLETED, "payload");
+    verify(hashes).putAll("key", Map.of("plan", "\"payload\"", "stage", "PLAN_COMPLETED"));
+    verify(hashes, never()).put(anyString(), any(), any());
   }
 }

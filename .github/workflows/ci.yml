@@ -22,7 +22,7 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
-      - run: ./mvnw test
+      - run: ./mvnw verify
 
   frontend:
     runs-on: ubuntu-latest
@@ -37,6 +37,7 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
       - run: npm ci
+      - run: npm run format:check
       - run: npm test
       - run: npm run build
 
