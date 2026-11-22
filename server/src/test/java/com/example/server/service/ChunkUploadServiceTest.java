@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.redisson.api.RLock;
+import org.redisson.api.RReadWriteLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.SetOperations;
@@ -32,7 +33,7 @@ class ChunkUploadServiceTest {
   private final MinioUtils minio = mock(MinioUtils.class);
   private final MediaService mediaService = mock(MediaService.class);
   private final RedissonClient redisson = mock(RedissonClient.class);
-  private final Map<String, String> receipts = new HashMap<>();
+  private final Map<String, String> receipts = new java.util.concurrent.ConcurrentHashMap<>();
   private final MediaFile media = new MediaFile();
   private ChunkUploadService service;
 
@@ -64,8 +65,12 @@ class ChunkUploadServiceTest {
         .when(values)
         .set(anyString(), anyString(), anyLong(), any(TimeUnit.class));
     RLock lock = mock(RLock.class);
-    when(redisson.getLock(anyString())).thenReturn(lock);
+    RReadWriteLock state = mock(RReadWriteLock.class);
+    when(redisson.getReadWriteLock(anyString())).thenReturn(state);
+    when(state.readLock()).thenReturn(lock);
+    when(state.writeLock()).thenReturn(lock);
     when(lock.tryLock()).thenReturn(true);
+    when(lock.tryLock(anyLong(), any(TimeUnit.class))).thenReturn(true);
     when(lock.isHeldByCurrentThread()).thenReturn(true);
     doAnswer(
             call -> {
@@ -82,6 +87,86 @@ class ChunkUploadServiceTest {
         .thenReturn(media);
     when(mediaService.requireOwnedMedia(42L, 7L)).thenReturn(media);
     service = new ChunkUploadService(redis, redisson, minio, mediaService);
+  }
+
+  @Test
+  void mergeCannotReadPartsWhileAChunkReplacementIsStillInFlight() throws Exception {
+    java.util.concurrent.locks.ReentrantReadWriteLock gate =
+        new java.util.concurrent.locks.ReentrantReadWriteLock();
+    RReadWriteLock distributed = mock(RReadWriteLock.class);
+    RLock read = mock(RLock.class);
+    RLock write = mock(RLock.class);
+    when(redisson.getReadWriteLock(anyString())).thenReturn(distributed);
+    when(distributed.readLock()).thenReturn(read);
+    when(distributed.writeLock()).thenReturn(write);
+    when(read.tryLock(anyLong(), any(TimeUnit.class)))
+        .thenAnswer(call -> gate.readLock().tryLock(5, TimeUnit.SECONDS));
+    when(read.isHeldByCurrentThread()).thenAnswer(call -> gate.getReadHoldCount() > 0);
+    doAnswer(
+            call -> {
+              gate.readLock().unlock();
+              return null;
+            })
+        .when(read)
+        .unlock();
+    when(write.tryLock()).thenAnswer(call -> gate.writeLock().tryLock());
+    when(write.isHeldByCurrentThread()).thenAnswer(call -> gate.isWriteLockedByCurrentThread());
+    doAnswer(
+            call -> {
+              gate.writeLock().unlock();
+              return null;
+            })
+        .when(write)
+        .unlock();
+    var entered = new java.util.concurrent.CountDownLatch(1);
+    var release = new java.util.concurrent.CountDownLatch(1);
+    when(minio.uploadObject(anyString(), any(), anyLong(), anyString()))
+        .thenAnswer(
+            call -> {
+              entered.countDown();
+              assertTrue(release.await(5, TimeUnit.SECONDS));
+              return "part";
+            });
+    try (var executor = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+      var uploading =
+          executor.submit(
+              () -> {
+                service.uploadChunk(
+                    UPLOAD_ID, 0, 2, new MockMultipartFile("file", new byte[] {4, 5, 6}), 7L);
+                return null;
+              });
+      try {
+        assertTrue(entered.await(5, TimeUnit.SECONDS));
+        var conflict =
+            assertThrows(
+                com.example.server.exception.BusinessException.class,
+                () -> service.complete(UPLOAD_ID, 7L));
+        assertEquals(40900, conflict.errorCode().code());
+        verify(minio, never()).copyObjectTo(anyString(), any());
+      } finally {
+        release.countDown();
+      }
+      uploading.get(5, TimeUnit.SECONDS);
+      assertSame(media, service.complete(UPLOAD_ID, 7L));
+    }
+    assertEquals(0, gate.getReadLockCount());
+    assertFalse(gate.isWriteLocked());
+  }
+
+  @Test
+  void completionWhileWaitingForChunkLockDoesNotRecreateDeletedParts() throws Exception {
+    RReadWriteLock state = redisson.getReadWriteLock("lock:upload:state:" + UPLOAD_ID);
+    RLock read = state.readLock();
+    when(read.tryLock(anyLong(), any(TimeUnit.class)))
+        .thenAnswer(
+            call -> {
+              receipts.put(KEY + ":completed", "42");
+              return true;
+            });
+    service.uploadChunk(UPLOAD_ID, 0, 2, new MockMultipartFile("file", new byte[] {1}), 7L);
+    verify(minio, never()).uploadObject(anyString(), any(), anyLong(), anyString());
+    verify(sets, never()).add(anyString(), anyString());
+    verify(read).unlock();
   }
 
   @Test

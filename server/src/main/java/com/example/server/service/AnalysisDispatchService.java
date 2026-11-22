@@ -79,32 +79,40 @@ public class AnalysisDispatchService {
       }
       // 旧结果先留着。消费者真正接手后再切 Checkpoint，MQ 投递失败时用户还有结果可看。
       if (revision != null) aiService.stageRevision(revision, resolvedMode);
+      publishStatus(
+          mediaId, goal, resolvedMode, TaskStatus.State.QUEUED, "任务正在提交到异步分析队列", TaskStage.QUEUED);
       rocketMQTemplate.convertAndSend(
           analysisTopic,
           new AnalysisTaskMsg(mediaId, action, contentHash, goal, resolvedMode.name()));
     } catch (RuntimeException e) {
       redisTemplate.delete(activeKey);
       if (revision != null) aiService.cancelStagedRevision(mediaId, goal, resolvedMode);
+      publishStatus(
+          mediaId,
+          goal,
+          resolvedMode,
+          TaskStatus.State.FAILED,
+          "分析任务提交失败，请稍后重试",
+          TaskStage.DISPATCH_FAILED);
       log.error("analysis_dispatch_failed mediaId={} userId={}", mediaId, mediaFile.getUserId(), e);
       return SubmissionResult.FAILED;
     }
 
-    try {
-      taskEventService.publishAnalysis(
-          mediaId,
-          goal,
-          resolvedMode,
-          TaskStatus.of(TaskStatus.State.QUEUED, "任务已进入异步分析队列"),
-          TaskStage.QUEUED);
-    } catch (RuntimeException eventError) {
-      // MQ 已经接单，通知失败不能把任务伪装成投递失败。
-      log.warn(
-          "analysis_queued_event_failed mediaId={} userId={}",
-          mediaId,
-          mediaFile.getUserId(),
-          eventError);
-    }
     return SubmissionResult.ACCEPTED;
+  }
+
+  private void publishStatus(
+      Long mediaId,
+      String goal,
+      AnalysisMode mode,
+      TaskStatus.State state,
+      String message,
+      TaskStage stage) {
+    try {
+      taskEventService.publishAnalysis(mediaId, goal, mode, TaskStatus.of(state, message), stage);
+    } catch (RuntimeException eventError) {
+      log.warn("analysis_dispatch_event_failed mediaId={} stage={}", mediaId, stage, eventError);
+    }
   }
 
   public boolean isActive(Long mediaId, String goal) {

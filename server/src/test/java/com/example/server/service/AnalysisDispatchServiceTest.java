@@ -18,6 +18,109 @@ import org.springframework.data.redis.core.ValueOperations;
 
 class AnalysisDispatchServiceTest {
   @Test
+  void evenImmediateConsumerCompletionCannotBeFollowedByAQueuedEvent() {
+    Fixture fixture = fixture();
+    java.util.List<TaskStage> stages = new java.util.ArrayList<>();
+    doAnswer(
+            call -> {
+              stages.add(call.getArgument(4));
+              return null;
+            })
+        .when(fixture.events)
+        .publishAnalysis(anyLong(), anyString(), any(), any(), any());
+    doAnswer(
+            call -> {
+              fixture.events.publishAnalysis(
+                  7L,
+                  "goal",
+                  AnalysisMode.GENERAL,
+                  TaskStatus.completed("done"),
+                  TaskStage.COMPLETED);
+              return null;
+            })
+        .when(fixture.mq)
+        .convertAndSend(anyString(), any(AnalysisTaskMsg.class));
+    assertEquals(
+        AnalysisDispatchService.SubmissionResult.ACCEPTED,
+        fixture.service.submit(media(), "goal", null));
+    assertEquals(java.util.List.of(TaskStage.QUEUED, TaskStage.COMPLETED), stages);
+  }
+
+  @Test
+  void dispatchFailureTerminatesThePreviouslyPublishedQueuedState() {
+    Fixture fixture = fixture();
+    doThrow(new IllegalStateException("broker unavailable"))
+        .when(fixture.mq)
+        .convertAndSend(anyString(), any(AnalysisTaskMsg.class));
+    assertEquals(
+        AnalysisDispatchService.SubmissionResult.FAILED,
+        fixture.service.submit(media(), "goal", null));
+    var order = inOrder(fixture.events);
+    order
+        .verify(fixture.events)
+        .publishAnalysis(
+            eq(7L),
+            eq("goal"),
+            eq(AnalysisMode.GENERAL),
+            argThat(status -> status.state() == TaskStatus.State.QUEUED),
+            eq(TaskStage.QUEUED));
+    order
+        .verify(fixture.events)
+        .publishAnalysis(
+            eq(7L),
+            eq("goal"),
+            eq(AnalysisMode.GENERAL),
+            argThat(status -> status.state() == TaskStatus.State.FAILED),
+            eq(TaskStage.DISPATCH_FAILED));
+  }
+
+  @Test
+  void notificationFailureDoesNotPreventDispatch() {
+    Fixture fixture = fixture();
+    doThrow(new IllegalStateException("event transport unavailable"))
+        .when(fixture.events)
+        .publishAnalysis(anyLong(), anyString(), any(), any(), any());
+    assertEquals(
+        AnalysisDispatchService.SubmissionResult.ACCEPTED,
+        fixture.service.submit(media(), "goal", null));
+    verify(fixture.mq).convertAndSend(eq("analysis"), any(AnalysisTaskMsg.class));
+  }
+
+  private Fixture fixture() {
+    StringRedisTemplate redis = mock(StringRedisTemplate.class);
+    ValueOperations<String, String> values = mock(ValueOperations.class);
+    when(redis.opsForValue()).thenReturn(values);
+    when(values.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(true);
+    RedissonClient redisson = mock(RedissonClient.class);
+    RRateLimiter limiter = mock(RRateLimiter.class);
+    when(redisson.getRateLimiter(anyString())).thenReturn(limiter);
+    when(limiter.tryAcquire()).thenReturn(true);
+    RocketMQTemplate mq = mock(RocketMQTemplate.class);
+    TaskEventService events = mock(TaskEventService.class);
+    return new Fixture(
+        new AnalysisDispatchService(
+            mock(AiService.class),
+            mock(MediaService.class),
+            redis,
+            mq,
+            redisson,
+            events,
+            "analysis"),
+        mq,
+        events);
+  }
+
+  private MediaFile media() {
+    MediaFile media = new MediaFile();
+    media.setId(7L);
+    media.setUserId(1L);
+    return media;
+  }
+
+  private record Fixture(
+      AnalysisDispatchService service, RocketMQTemplate mq, TaskEventService events) {}
+
+  @Test
   void identicalContentInDifferentMediaRecordsGetsIndependentTasksButSameMediaCannotOverlap() {
     StringRedisTemplate redis = mock(StringRedisTemplate.class);
     ValueOperations<String, String> values = mock(ValueOperations.class);

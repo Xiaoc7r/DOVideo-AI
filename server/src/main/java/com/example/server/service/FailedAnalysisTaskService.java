@@ -120,6 +120,8 @@ public class FailedAnalysisTaskService {
     boolean dispatched = false;
     try {
       redisTemplate.delete(AnalysisTaskKeys.attempts(taskScope, goalDigest));
+      publishReplayStatus(
+          task, mode, TaskStatus.State.QUEUED, TaskStage.MANUAL_REPLAY, "失败任务正在由管理员重新入队");
       rocketMQTemplate.convertAndSend(
           analysisTopic,
           new AnalysisTaskMsg(
@@ -133,6 +135,8 @@ public class FailedAnalysisTaskService {
     } catch (RuntimeException e) {
       if (!dispatched) {
         redisTemplate.delete(activeKey);
+        publishReplayStatus(
+            task, mode, TaskStatus.State.FAILED, TaskStage.DISPATCH_FAILED, "失败任务重新入队失败，请稍后重试");
       } else {
         // 消息已发出时保留幂等键，避免台账更新失败诱发重复重放。
         log.error(
@@ -143,18 +147,21 @@ public class FailedAnalysisTaskService {
       }
       throw e;
     }
+  }
 
+  private void publishReplayStatus(
+      FailedAnalysisTask task,
+      AnalysisMode mode,
+      TaskStatus.State state,
+      TaskStage stage,
+      String message) {
     try {
       taskEventService.publishAnalysis(
-          task.getMediaId(),
-          task.getUserGoal(),
-          mode,
-          TaskStatus.of(TaskStatus.State.QUEUED, "失败任务已由管理员重新入队"),
-          TaskStage.MANUAL_REPLAY);
+          task.getMediaId(), task.getUserGoal(), mode, TaskStatus.of(state, message), stage);
     } catch (RuntimeException eventError) {
       log.warn(
           "failed_analysis_replay_event_failed taskId={} mediaId={}",
-          id,
+          task.getId(),
           task.getMediaId(),
           eventError);
     }
@@ -162,7 +169,9 @@ public class FailedAnalysisTaskService {
 
   private Throwable rootCause(Throwable error) {
     Throwable current = error;
-    while (current.getCause() != null && current.getCause() != current) {
+    for (int depth = 0;
+        depth < 16 && current.getCause() != null && current.getCause() != current;
+        depth++) {
       current = current.getCause();
     }
     return current;

@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -19,6 +20,7 @@ public class SegmentedTranscriptionService {
 
   private static final Logger log = LoggerFactory.getLogger(SegmentedTranscriptionService.class);
   private static final long SEGMENT_MS = 60_000L;
+  private static final Pattern AUDIO_PART = Pattern.compile("audio_[0-9]+\\.mp3");
 
   private final AliyunAsrUtils aliyunAsrUtils;
   private final AgentTelemetry telemetry;
@@ -55,7 +57,12 @@ public class SegmentedTranscriptionService {
 
     List<Path> audioFiles;
     try (var paths = Files.list(audioDir)) {
-      audioFiles = paths.filter(Files::isRegularFile).sorted().toList();
+      audioFiles =
+          paths
+              .filter(Files::isRegularFile)
+              .filter(path -> AUDIO_PART.matcher(path.getFileName().toString()).matches())
+              .sorted(Comparator.comparingInt(this::segmentIndex))
+              .toList();
     }
 
     List<TranscriptSegment> result = new ArrayList<>();
@@ -64,11 +71,14 @@ public class SegmentedTranscriptionService {
     for (int i = 0; i < audioFiles.size(); i++) {
       if (Thread.currentThread().isInterrupted()) throw new InterruptedException("ASR interrupted");
       Path audioFile = audioFiles.get(i);
+      long segmentIndex = segmentIndex(audioFile);
       try {
         telemetry.increment(traceId, "asrCalls", 1);
         String text = aliyunAsrUtils.audioToText(audioFile.toString());
         if (text != null && !text.isBlank()) {
-          result.add(new TranscriptSegment(i * SEGMENT_MS, (i + 1) * SEGMENT_MS, text));
+          result.add(
+              new TranscriptSegment(
+                  segmentIndex * SEGMENT_MS, (segmentIndex + 1) * SEGMENT_MS, text));
         }
       } catch (RuntimeException e) {
         failedSegments++;
@@ -84,6 +94,11 @@ public class SegmentedTranscriptionService {
       throw new IllegalStateException("所有 ASR 分片均处理失败", lastSegmentError);
     }
     return result;
+  }
+
+  private int segmentIndex(Path file) {
+    String name = file.getFileName().toString();
+    return Integer.parseInt(name.substring("audio_".length(), name.length() - ".mp3".length()));
   }
 
   public String transcribeToText(String videoPath) {

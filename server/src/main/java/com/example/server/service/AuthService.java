@@ -9,6 +9,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
@@ -16,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -36,6 +39,16 @@ public class AuthService {
   private static final long LOGIN_FAILURE_WINDOW_MINUTES = 10;
   private static final int MAX_PASSWORD_LENGTH = 128;
   private static final int MAX_NICKNAME_LENGTH = 50;
+  private static final DefaultRedisScript<Long> RECORD_FAILURE =
+      new DefaultRedisScript<>(
+          """
+      local failures = redis.call('INCR', KEYS[1])
+      if failures == 1 or redis.call('TTL', KEYS[1]) < 0 then
+        redis.call('EXPIRE', KEYS[1], ARGV[1])
+      end
+      return failures
+      """,
+          Long.class);
 
   private final StringRedisTemplate redisTemplate;
   private final UserMapper userMapper;
@@ -83,7 +96,10 @@ public class AuthService {
 
   public AuthResponse login(AuthRequest request) {
     String username = normalizeUsername(request.username());
-    if (username == null || request.password() == null || request.password().isBlank()) {
+    if (username == null
+        || request.password() == null
+        || request.password().isBlank()
+        || request.password().length() > MAX_PASSWORD_LENGTH) {
       return response(400, "请输入账号和密码", null, null);
     }
     if (!loginAttemptAllowed(username)) {
@@ -173,26 +189,29 @@ public class AuthService {
   }
 
   public boolean loginAttemptAllowed(String username) {
-    String value = redisTemplate.opsForValue().get(LOGIN_FAILURE_PREFIX + username);
+    String value = redisTemplate.opsForValue().get(loginFailureKey(username));
     if (value == null) return true;
     try {
       return Long.parseLong(value) < MAX_LOGIN_FAILURES;
     } catch (NumberFormatException e) {
-      redisTemplate.delete(LOGIN_FAILURE_PREFIX + username);
+      redisTemplate.delete(loginFailureKey(username));
       return true;
     }
   }
 
   public void recordLoginFailure(String username) {
-    String key = LOGIN_FAILURE_PREFIX + username;
-    Long failures = redisTemplate.opsForValue().increment(key);
-    if (failures != null && failures == 1) {
-      redisTemplate.expire(key, LOGIN_FAILURE_WINDOW_MINUTES, TimeUnit.MINUTES);
-    }
+    redisTemplate.execute(
+        RECORD_FAILURE,
+        List.of(loginFailureKey(username)),
+        Long.toString(TimeUnit.MINUTES.toSeconds(LOGIN_FAILURE_WINDOW_MINUTES)));
   }
 
   public void clearLoginFailures(String username) {
-    redisTemplate.delete(LOGIN_FAILURE_PREFIX + username);
+    redisTemplate.delete(loginFailureKey(username));
+  }
+
+  private String loginFailureKey(String username) {
+    return LOGIN_FAILURE_PREFIX + username.toLowerCase(Locale.ROOT);
   }
 
   private String normalizeUsername(String username) {

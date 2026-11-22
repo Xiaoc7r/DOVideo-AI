@@ -2,11 +2,14 @@ package com.example.server.utils;
 
 import com.example.server.common.ErrorCode;
 import com.example.server.exception.BusinessException;
+import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Value;
@@ -18,6 +21,8 @@ public class MediaProcessRunner {
   private final Semaphore slots;
   private final String threads;
   private final String ffmpeg;
+  private final Set<Process> active = new HashSet<>();
+  private volatile boolean closed;
 
   public MediaProcessRunner(
       @Value("${tool.media.max-processes:2}") int maxProcesses,
@@ -51,6 +56,7 @@ public class MediaProcessRunner {
 
   public int run(ProcessBuilder builder, Duration timeout)
       throws IOException, InterruptedException {
+    if (closed) throw new BusinessException(ErrorCode.SERVICE_UNAVAILABLE, "媒体工具服务正在关闭");
     long deadline = System.nanoTime() + timeout.toNanos();
     long admissionWait = Math.min(timeout.toNanos(), TimeUnit.SECONDS.toNanos(30));
     if (!slots.tryAcquire(admissionWait, TimeUnit.NANOSECONDS)) {
@@ -59,7 +65,11 @@ public class MediaProcessRunner {
     Process process = null;
     try {
       builder.environment().put("OMP_THREAD_LIMIT", threads);
-      process = builder.start();
+      synchronized (active) {
+        if (closed) throw new BusinessException(ErrorCode.SERVICE_UNAVAILABLE, "媒体工具服务正在关闭");
+        process = builder.start();
+        active.add(process);
+      }
       long remaining = deadline - System.nanoTime();
       if (remaining <= 0 || !process.waitFor(remaining, TimeUnit.NANOSECONDS)) {
         throw new IllegalStateException("媒体工具执行超时");
@@ -67,20 +77,36 @@ public class MediaProcessRunner {
       return process.exitValue();
     } finally {
       try {
-        if (process != null && process.isAlive()) {
-          try (var descendants = process.descendants()) {
-            descendants.forEach(ProcessHandle::destroyForcibly);
-          }
-          process.destroyForcibly();
-          try {
-            process.waitFor(5, TimeUnit.SECONDS);
-          } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-          }
-        }
+        terminate(process);
       } finally {
+        synchronized (active) {
+          active.remove(process);
+        }
         slots.release();
       }
+    }
+  }
+
+  @PreDestroy
+  public void close() {
+    List<Process> processes;
+    synchronized (active) {
+      closed = true;
+      processes = List.copyOf(active);
+    }
+    processes.forEach(this::terminate);
+  }
+
+  private void terminate(Process process) {
+    if (process == null || !process.isAlive()) return;
+    try (var descendants = process.descendants()) {
+      descendants.forEach(ProcessHandle::destroyForcibly);
+    }
+    process.destroyForcibly();
+    try {
+      process.waitFor(5, TimeUnit.SECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
     }
   }
 }

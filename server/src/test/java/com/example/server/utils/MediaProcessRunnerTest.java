@@ -83,6 +83,29 @@ class MediaProcessRunnerTest {
   }
 
   @Test
+  void shutdownTerminatesOwnedProcessesAndRejectsNewWork() throws Exception {
+    MediaProcessRunner runner = new MediaProcessRunner(1, 1, "");
+    try (var executor = Executors.newSingleThreadExecutor()) {
+      var running = executor.submit(() -> runner.run(command("sleep"), Duration.ofSeconds(15)));
+      try {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!Files.exists(directory.resolve("pid")) && System.nanoTime() < deadline)
+          Thread.sleep(20);
+        assertTrue(Files.exists(directory.resolve("pid")));
+        long pid = Long.parseLong(Files.readString(directory.resolve("pid")));
+        runner.close();
+        assertNotEquals(0, running.get(5, TimeUnit.SECONDS));
+        assertFalse(ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false));
+        assertThrows(
+            BusinessException.class, () -> runner.run(command("exclusive"), Duration.ofSeconds(1)));
+      } finally {
+        runner.close();
+        running.cancel(true);
+      }
+    }
+  }
+
+  @Test
   void startupFailureReleasesCapacity() throws Exception {
     MediaProcessRunner runner = new MediaProcessRunner(1, 1, "");
     assertThrows(

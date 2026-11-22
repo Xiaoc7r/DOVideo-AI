@@ -100,6 +100,42 @@ test('closing an evidence search releases its busy state and discards the late r
   assert.deepEqual(workspace.sidebar.value.evidenceResults, [])
 })
 
+test('revising the same media invalidates its previous evidence search and releases busy state', async () => {
+  const evidence = deferred()
+  globalThis.fetch = async (url) => {
+    if (url.startsWith('/analysis/evidence-search')) return evidence.promise
+    if (url.startsWith('/analysis/analysis-status'))
+      return json({ state: 'COMPLETED', result: 'old report' })
+    return json(null)
+  }
+  const workspace = setup()
+  await workspace.openAgent(item)
+  workspace.sidebar.value.evidenceQuery = 'old evidence'
+  const searching = workspace.searchEvidence()
+  workspace.sidebar.value.planDraft = ['new task']
+  await workspace.rerunWithPlan()
+  assert.equal(workspace.sidebar.value.evidenceLoading, false)
+  evidence.resolve(json([{ snippet: 'old evidence' }]))
+  await searching
+  assert.deepEqual(workspace.sidebar.value.evidenceResults, [])
+  assert.equal(workspace.sidebar.value.evidenceError, '')
+})
+
+test('an auth session change discards old evidence even without a workspace reset', async () => {
+  const evidence = deferred()
+  globalThis.fetch = async (url) =>
+    url.startsWith('/analysis/evidence-search') ? evidence.promise : json({ state: 'NOT_STARTED' })
+  const workspace = setup()
+  await workspace.openAgent(item)
+  workspace.sidebar.value.evidenceQuery = 'old user evidence'
+  const searching = workspace.searchEvidence()
+  setAuthToken('new-session')
+  workspace.sidebar.value.evidenceResults = [{ snippet: 'new session result' }]
+  evidence.resolve(json([{ snippet: 'old session result' }]))
+  await searching
+  assert.deepEqual(workspace.sidebar.value.evidenceResults, [{ snippet: 'new session result' }])
+})
+
 test('switching panels while transcription is submitted keeps its background stream', async () => {
   const submission = deferred()
   let submitted
